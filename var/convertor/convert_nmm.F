@@ -205,7 +205,7 @@ print *,'init_typ  =',model_config_rec%real_data_init_type
    CALL model_to_grid_config_rec ( grid%id , model_config_rec , config_flags )
 
 
-! these are needed on some compilers, eg compaq/alpha, to
+! these are needed on some compilers, eg compaq/alpha, to 
 ! permit pass by reference through the registry generated
 ! interface to med_read_nmm, below 
 #include "deref_kludge.h"
