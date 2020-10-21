@@ -1,4 +1,4 @@
-# LOC = data/preproc/atms_beamwidth.dat 
+# LOC = data/preproc/atms_beamwidth.dat  
 # WMO Satellite ID
 224
 # Version identifier
