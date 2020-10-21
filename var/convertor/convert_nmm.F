@@ -207,7 +207,7 @@ print *,'init_typ  =',model_config_rec%real_data_init_type
 
 ! these are needed on some compilers, eg compaq/alpha, to
 ! permit pass by reference through the registry generated
-! interface to med_read_nmm, below
+! interface to med_read_nmm, below 
 #include "deref_kludge.h"
 
    ntsd = 0 
