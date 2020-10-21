@@ -195,7 +195,7 @@ print *,'init_typ  =',model_config_rec%real_data_init_type
       END IF
    END DO loop_count
 
-   !  Here we define the initial time to process, for later use by the code.
+   !  Here we define the initial time to process, for later use by the code. 
 
    current_date_char = start_date_char
    start_date = start_date_char // '.0000'
