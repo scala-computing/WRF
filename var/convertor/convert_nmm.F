@@ -72,7 +72,7 @@ PROGRAM convert_nmm
 
 ! these are needed on some compilers, eg compaq/alpha, to 
 ! permit pass by reference through the registry generated 
-! interface to med_read_nmm, below
+! interface to med_read_nmm, below 
 #ifdef DEREF_KLUDGE
 !  see http://www.mmm.ucar.edu/wrf/WG2/topics/deref_kludge.htm
    INTEGER     :: sm31 , em31 , sm32 , em32 , sm33 , em33
