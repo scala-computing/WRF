@@ -70,7 +70,7 @@ PROGRAM convert_nmm
 
    CHARACTER (LEN=80) :: inpname , bdyname
 
-! these are needed on some compilers, eg compaq/alpha, to
+! these are needed on some compilers, eg compaq/alpha, to 
 ! permit pass by reference through the registry generated 
 ! interface to med_read_nmm, below
 #ifdef DEREF_KLUDGE
