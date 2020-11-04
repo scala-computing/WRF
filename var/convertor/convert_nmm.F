@@ -71,7 +71,7 @@ PROGRAM convert_nmm
    CHARACTER (LEN=80) :: inpname , bdyname
 
 ! these are needed on some compilers, eg compaq/alpha, to
-! permit pass by reference through the registry generated
+! permit pass by reference through the registry generated 
 ! interface to med_read_nmm, below
 #ifdef DEREF_KLUDGE
 !  see http://www.mmm.ucar.edu/wrf/WG2/topics/deref_kludge.htm
