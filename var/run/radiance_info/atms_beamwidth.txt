@@ -1,7 +1,7 @@
 # LOC = data/preproc/atms_beamwidth.dat   
 # WMO Satellite ID 
 224
-# Version identifier
+# Version identifier 
 1
 # Sampling distance (deg)
 1.11
