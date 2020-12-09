@@ -1,6 +1,6 @@
 ! This is a program that converts NMM data into WRF input data. blah blah blah blah blahbity blah 
 ! No boundary data yet. balshssf
-! Updated comments again
+! Updated comments again 
 PROGRAM convert_nmm
 
    USE module_machine
