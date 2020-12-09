@@ -1,4 +1,4 @@
-! This is a program that converts NMM data into WRF input data. blah blah blah blah blahbity blah 
+! This is a program that converts NMM data into WRF input data. blah blah blah blah blahbity blah blah
 ! No boundary data yet. balshssf yadda yadda yadda
 ! Updated comments again and again
 PROGRAM convert_nmm
