@@ -80,7 +80,7 @@ PROGRAM convert_nmm
    INTEGER     :: sm31y, em31y, sm32y, em32y, sm33y, em33y
 #endif
 
-   !  Get the NAMELIST data for input.
+   !  Get the NAMELIST data for input. 
 
    !  Define the name of this program (program_name defined in module_domain)
 
