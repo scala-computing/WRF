@@ -3,7 +3,7 @@
 224
 # Version identifier 
 1
-# Sampling distance (deg)
+# Sampling distance (deg) 
 1.11
 # Number of channels to modify 
 22 
