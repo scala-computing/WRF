@@ -36,7 +36,7 @@ PROGRAM real_data
    INTEGER :: idum1, idum2 
 #ifdef DM_PARALLEL
    INTEGER                 :: nbytes
-!   INTEGER, PARAMETER      :: configbuflen = 2*1024
+!   INTEGER, PARAMETER      :: configbuflen = 2*1024 
    INTEGER, PARAMETER      :: configbuflen = 4*CONFIG_BUF_LEN
    INTEGER                 :: configbuf( configbuflen )
    LOGICAL , EXTERNAL      :: wrf_dm_on_monitor
