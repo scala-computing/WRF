@@ -934,6 +934,341 @@ SUBROUTINE med_nest_initial ( parent , nest , config_flags )
 
 #endif
 
+#if (NMM_CORE == 1 && NMM_NEST == 1)
+!===================================================================================
+!  Added for the NMM core. This is gopal's doing.
+!===================================================================================
+
+   INTERFACE
+
+     SUBROUTINE med_nest_egrid_configure ( parent , nest )
+        USE module_domain       , ONLY : domain
+        TYPE(domain) , POINTER                 :: parent , nest
+     END SUBROUTINE med_nest_egrid_configure 
+
+     SUBROUTINE med_construct_egrid_weights ( parent , nest )
+        USE module_domain       , ONLY : domain
+        TYPE(domain) , POINTER                 :: parent , nest
+     END SUBROUTINE med_construct_egrid_weights
+
+     SUBROUTINE BASE_STATE_PARENT ( Z3d,Q3d,T3d,PSTD,        &
+                                    PINT,T,Q,CWM,            &
+                                    FIS,QSH,PD,PDTOP,PTOP,   &
+                                    ETA1,ETA2,               &
+                                    DETA1,DETA2,             &
+                                    IDS,IDE,JDS,JDE,KDS,KDE, &
+                                    IMS,IME,JMS,JME,KMS,KME, &
+                                    IPS,IPE,JPS,JPE,KPS,KPE  )
+!
+
+         USE MODULE_MODEL_CONSTANTS
+         IMPLICIT NONE
+         INTEGER,    INTENT(IN   )                            :: IDS,IDE,JDS,JDE,KDS,KDE
+         INTEGER,    INTENT(IN   )                            :: IMS,IME,JMS,JME,KMS,KME
+         INTEGER,    INTENT(IN   )                            :: IPS,IPE,JPS,JPE,KPS,KPE
+         REAL,       INTENT(IN   )                            :: PDTOP,PTOP
+         REAL, DIMENSION(KMS:KME),                 INTENT(IN) :: ETA1,ETA2,DETA1,DETA2
+         REAL, DIMENSION(IMS:IME,JMS:JME),         INTENT(IN) :: FIS,PD,QSH
+         REAL, DIMENSION(IMS:IME,JMS:JME,KMS:KME), INTENT(IN) :: PINT,T,Q,CWM
+         REAL, DIMENSION(KMS:KME)                , INTENT(OUT):: PSTD
+         REAL, DIMENSION(IMS:IME,JMS:JME,KMS:KME), INTENT(OUT):: Z3d,Q3d,T3d
+
+     END SUBROUTINE BASE_STATE_PARENT
+
+     SUBROUTINE NEST_TERRAIN ( nest, config_flags )
+       USE module_domain        , ONLY : domain
+       USE module_configure     , ONLY : grid_config_rec_type
+       TYPE(domain) , POINTER                        :: nest
+       TYPE(grid_config_rec_type) , INTENT(IN)       :: config_flags
+     END SUBROUTINE NEST_TERRAIN
+
+    SUBROUTINE med_interp_domain ( parent , nest )
+        USE module_domain       , ONLY : domain
+        TYPE(domain) , POINTER                 :: parent , nest
+    END SUBROUTINE med_interp_domain
+
+    SUBROUTINE med_init_domain_constants_nmm ( parent, nest )
+        USE module_domain       , ONLY : domain
+        TYPE(domain) , POINTER                    :: parent , nest
+    END SUBROUTINE med_init_domain_constants_nmm
+
+    SUBROUTINE start_domain ( grid , allowed_to_move )
+        USE module_domain       , ONLY : domain
+        TYPE(domain) :: grid
+        LOGICAL, INTENT(IN) :: allowed_to_move
+    END SUBROUTINE start_domain
+
+   END INTERFACE
+
+#if ( HWRF == 1 )
+!zhang's doing test
+   if (config_flags%restart .or. nest%analysis) then
+   nest%first_force = .true.
+   else
+   nest%first_force = .false.
+   endif
+!end of zhang's doing
+
+   ! Do we run the MOIST and SCALAR interp/smooth functions? (u=(), d=(), f=() and s=())
+
+   ! Only run it if a non-bulk scheme is in use, since bulk schemes do
+   ! not use MOIST and SCALAR as prognostic variables (they are
+   ! recalculated on the fly every timestep):
+!zhang's doing for analysis option
+  IF(.not. nest%analysis .and. .not. config_flags%restart)THEN    ! initialize for cold-start
+#endif
+
+!----------------------------------------------------------------------------
+!  initialize nested domain configurations including setting up wbd,sbd, etc 
+!----------------------------------------------------------------------------
+
+   CALL med_nest_egrid_configure ( parent , nest )
+
+!-------------------------------------------------------------------------
+!  initialize lat-lons and determine weights 
+!-------------------------------------------------------------------------
+
+    CALL med_construct_egrid_weights ( parent, nest )
+!
+!
+!  De-reference dimension information stored in the grid data structure.
+!
+!  From the hybrid, construct the GPMs on isobaric surfaces and then interpolate those
+!  values on to the nested domain. 23 standard pressure levels are assumed here. For
+!  levels below ground, lapse rate atmosphere is assumed before the use of vertical
+!  spline interpolation 
+!
+
+
+    IDS = parent%sd31
+    IDE = parent%ed31
+    JDS = parent%sd32
+    JDE = parent%ed32
+    KDS = parent%sd33
+    KDE = parent%ed33
+
+    IMS = parent%sm31
+    IME = parent%em31
+    JMS = parent%sm32
+    JME = parent%em32
+    KMS = parent%sm33
+    KME = parent%em33
+
+    IPS = parent%sp31
+    IPE = parent%ep31
+    JPS = parent%sp32
+    JPE = parent%ep32
+    KPS = parent%sp33
+    KPE = parent%ep33
+
+    ! CALL BASE_STATE_PARENT ( parent%Z3d,parent%Q3d,parent%T3d,parent%PSTD,  &
+    !                          parent%PINT,parent%T,parent%Q,parent%CWM,      &
+    !                          parent%FIS,parent%QSH,parent%PD,parent%pdtop,parent%pt,   &
+    !                          parent%ETA1,parent%ETA2,                               &
+    !                          parent%DETA1,parent%DETA2,                             &
+    !                          IDS,IDE,JDS,JDE,KDS,KDE,                                       &
+    !                          IMS,IME,JMS,JME,KMS,KME,                                       &
+    !                          IPS,IPE,JPS,JPE,KPS,KPE                                        )
+
+!  
+!   Set new terrain. Since some terrain adjustment is done within the interpolation calls
+!   at the next step, the new terrain over the nested domain has to be called here.
+!
+    IDS = nest%sd31
+    IDE = nest%ed31
+    JDS = nest%sd32
+    JDE = nest%ed32
+    KDS = nest%sd33
+    KDE = nest%ed33
+
+    IMS = nest%sm31
+    IME = nest%em31
+    JMS = nest%sm32
+    JME = nest%em32
+    KMS = nest%sm33
+    KME = nest%em33
+
+    IPS = nest%sp31
+    IPE = nest%ep31
+    JPS = nest%sp32
+    JPE = nest%ep32
+    KPS = nest%sp33
+    KPE = nest%ep33
+
+
+    IF ( nest%active_this_task ) THEN
+    CALL NEST_TERRAIN ( nest, config_flags )
+    ENDIF
+
+!   Initialize some more constants required especially for terrain adjustment processes
+
+    IF ( nest%active_this_task .AND. parent%active_this_task ) THEN
+    nest%PSTD=parent%PSTD
+    ENDIF
+#ifdef DM_PARALLEL
+    IF ( nest%active_this_task .OR. parent%active_this_task ) THEN
+      IF ( parent%active_this_task ) THEN
+        CALL BYTE_BCAST( parent%PSTD, KME*RWORDSIZE, mpi_comm_to_kid( which_kid( nest%id ) , parent%id ) )
+      ELSE
+        CALL BYTE_BCAST( nest%PSTD, KME*RWORDSIZE, mpi_comm_to_mom( nest%id ) )
+      ENDIF
+    ENDIF
+#endif
+
+    IF ( nest%active_this_task ) THEN
+      nest%KZMAX=KME
+      parent%KZMAX=KME  ! just for safety
+
+      DO J = JPS, MIN(JPE,JDE-1)
+        DO I = IPS, MIN(IPE,IDE-1)
+         nest%fis(I,J)=nest%hres_fis(I,J)
+       ENDDO
+      ENDDO
+
+!--------------------------------------------------------------------------
+!  interpolation call
+!--------------------------------------------------------------------------
+
+! initialize nest with interpolated data from the parent
+
+      nest%imask_nostag = 0 
+      nest%imask_xstag  = 0 
+      nest%imask_ystag  = 0 
+      nest%imask_xystag = 0 
+    ENDIF
+
+#if ( HWRF == 1 )
+   CALL med_interp_domain( parent, nest )
+#else
+    CALL domain_clock_get( parent, start_time=strt_time, current_time=cur_time )
+
+    IF ( .not. ( config_flags%restart .AND. strt_time .EQ. cur_time ) ) THEN
+
+write(0,*)__FILE__,__LINE__,parent%id,nest%id
+     CALL med_interp_domain( parent, nest )
+write(0,*)__FILE__,__LINE__
+
+    ELSE
+
+     CALL domain_clock_get( nest, current_timestr=timestr )
+     CALL construct_filename2a ( rstname , config_flags%rst_inname , nest%id , 2 , timestr )
+
+     WRITE(message,*)'RESTART: nest, opening ',TRIM(rstname),' for reading'
+     CALL wrf_message ( message )
+     CALL model_to_grid_config_rec ( nest%id , model_config_rec , nest_config_flags )
+     CALL open_r_dataset ( fid , TRIM(rstname) , nest , nest_config_flags , "DATASET=RESTART", ierr )
+     IF ( ierr .NE. 0 ) THEN
+       WRITE( message , '("program wrf: error opening ",A32," for reading")') TRIM(rstname)
+       CALL WRF_ERROR_FATAL ( message )
+     ENDIF
+     CALL input_restart ( fid,   nest , nest_config_flags , ierr )
+     CALL close_dataset ( fid , nest_config_flags , "DATASET=RESTART" )
+
+    END IF
+
+#endif
+!------------------------------------------------------------------------------
+!  set up constants (module_initialize_real.F for nested nmm domain)
+!-----------------------------------------------------------------------------
+
+    CALL med_init_domain_constants_nmm ( parent, nest )
+
+!--------------------------------------------------------------------------------------
+! set some other initial fields, fill out halos, etc. 
+!--------------------------------------------------------------------------------------
+
+    IF ( nest%active_this_task) THEN
+      CALL push_communicators_for_domain( nest%id )
+      CALL start_domain ( nest, .TRUE.)
+      CALL pop_communicators_for_domain
+    ENDIF
+    
+
+#if ( HWRF == 1 )
+!zhang's doing: else for analysis or restart option
+
+!zhang test
+    CALL nl_set_isice ( nest%id , config_flags%isice )   
+    CALL nl_set_isoilwater ( nest%id , config_flags%isoilwater )   
+    CALL nl_set_isurban ( nest%id , config_flags%isurban )   
+    CALL nl_set_gmt    ( nest%id , config_flags%gmt    )   
+    CALL nl_set_julyr (nest%id, config_flags%julyr)       
+    CALL nl_set_julday ( nest%id , config_flags%julday )
+!zhang test ends
+    IF ( nest%active_this_task) THEN
+     CALL model_to_grid_config_rec ( nest%id , model_config_rec , nest_config_flags )
+     CALL push_communicators_for_domain( nest%id )
+     CALL med_analysis_out ( nest, nest_config_flags )
+     CALL pop_communicators_for_domain
+    ENDIF
+
+   ELSE
+
+!------------------------------------------------------------------------------------
+!  read in analysis (equivalent of restart for the nested domains)
+!------------------------------------------------------------------------------------
+
+!zhang's doing
+  IF ( nest%active_this_task) THEN
+  IF( nest%analysis .and. .not. config_flags%restart)THEN
+   CALL push_communicators_for_domain( nest%id )
+   CALL med_analysis_in ( nest, config_flags )
+   CALL pop_communicators_for_domain
+  ELSE IF (config_flags%restart)THEN
+   CALL push_communicators_for_domain( nest%id )
+   CALL med_restart_in ( nest, config_flags )
+   CALL pop_communicators_for_domain
+  ENDIF
+  ENDIF
+!end of zhang's doing
+
+!----------------------------------------------------------------------------
+!  initialize nested domain configurations including setting up wbd,sbd, etc
+!----------------------------------------------------------------------------
+
+   CALL med_nest_egrid_configure ( parent , nest )
+
+!-------------------------------------------------------------------------
+!  initialize lat-lons and determine weights (overwrite for safety)
+!-------------------------------------------------------------------------
+
+   CALL med_construct_egrid_weights ( parent, nest )
+
+   nest%imask_nostag = 0
+   nest%imask_xstag  = 0
+   nest%imask_ystag  = 0
+   nest%imask_xystag = 0
+
+!------------------------------------------------------------------------------
+!  set up constants (module_initialize_real.F for nested nmm domain)
+!-----------------------------------------------------------------------------
+
+    CALL med_init_domain_constants_nmm ( parent, nest )
+
+!--------------------------------------------------------------------------------------
+! set some other initial fields, fill out halos, etc. (again, safety sake only)
+! Also, in order to accomodate some physics initialization after nest move, set
+! analysis back to false for future use
+!--------------------------------------------------------------------------------------
+
+
+  IF ( nest%active_this_task) THEN
+    CALL push_communicators_for_domain( nest%id )
+    CALL start_domain ( nest, .TRUE.)
+    CALL pop_communicators_for_domain
+  ENDIF
+
+    nest%analysis=.FALSE.
+    CALL nl_set_analysis( nest%id, nest%analysis)
+
+  ENDIF
+
+#endif
+
+!===================================================================================
+!  Added for the NMM core. End of gopal's doing.
+!===================================================================================
+#endif
   RETURN
 END SUBROUTINE med_nest_initial
 

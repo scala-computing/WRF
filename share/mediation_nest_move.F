@@ -185,6 +185,105 @@ SUBROUTINE med_nest_move ( parent, nest )
      CALL pop_communicators_for_domain(grid%id)
 #endif
 
+#if (NMM_CORE == 1 && NMM_NEST == 1)
+
+!----------------------------------------------------------------------------
+!  initialize shifted domain configurations including setting up wbd,sbd, etc
+!----------------------------------------------------------------------------
+
+    CALL med_nest_egrid_configure ( parent , nest )
+
+!-------------------------------------------------------------------------
+!  initialize shifted domain lat-lons and determine weights
+!-------------------------------------------------------------------------
+
+    CALL med_construct_egrid_weights ( parent, nest )
+
+!
+!   Set new terrain. Since some terrain adjustment is done within the interpolation calls
+!   at the next step, the new terrain over the nested domain has to be called here.
+!
+
+    CALL model_to_grid_config_rec ( nest%id , model_config_rec , config_flags )
+
+    CALL NEST_TERRAIN ( nest, config_flags )
+
+    CALL get_ijk_from_grid ( nest ,                   &
+                             ids, ide, jds, jde, kds, kde,    &
+                             ims, ime, jms, jme, kms, kme,    &
+                             ips, ipe, jps, jpe, kps, kpe    )
+
+    IF ( nest%active_this_task ) THEN
+#if ( HWRF == 1 )
+!   adjust pint & pressure depth due to height change in nest_terrain
+!     assume lapse rate of 6.1K/1km
+      TLAP=6.1/(con_g*1000.)
+    DO J = MAX(JPS,JDS-PY), MIN(JPE,JDE-1-PY)
+     DO I = MAX(IPS,IDS-PX), MIN(IPE,IDE-1-PX)
+       if(  nest%fis(I,J).ne.nest%hres_fis(I,J) ) then
+       if( nest%T(I,J,1).gt.150. .and. nest%T(I,J,1).lt.400.) then
+       TBAR=ALOG(1.0+TLAP*(nest%fis(I,J)-nest%hres_fis(I,J)) /nest%T(I,J,1))
+       EPSI=TBAR/(con_rd*TLAP)
+!      recover pint from pressure depth after move, then adjust for diff topo
+       nest%PINT(I,J,1)=nest%PD(I,J)+nest%pdtop+nest%pt
+       nest%PINT(I,J,1)=nest%PINT(I,J,1)*EXP(EPSI)
+       nest%PD(I,J)=nest%PINT(I,J,1)-nest%pdtop-nest%pt  
+!       WRITE(0,*)I,J,nest%nmm_PD(I,J),nest%nmm_PINT(I,1,J),nest%nmm_FIS(I,J),nest%nmm_hres_fis(I,J),nest%nmm_pdtop,nest%nmm_pt, &
+!       'change pd,ptint'
+       endif
+       endif
+     ENDDO
+    ENDDO
+#endif
+
+    DO J = JPS, MIN(JPE,JDE-1)
+      DO I = IPS, MIN(IPE,IDE-1)
+       nest%fis(I,J)=nest%hres_fis(I,J)
+     ENDDO
+    ENDDO
+    ENDIF
+
+!
+!  De-reference dimension information stored in the grid data structure.
+!
+!  From the hybrid, construct the GPMs on isobaric surfaces and then interpolate those
+!  values on to the nested domain. 23 standard pressure levels are assumed here. For
+!  levels below ground, lapse rate atmosphere is assumed before the use of vertical
+!  spline interpolation
+!
+
+    CALL get_ijk_from_grid ( parent ,                   &
+                             ids, ide, jds, jde, kds, kde,    &
+                             ims, ime, jms, jme, kms, kme,    &
+                             ips, ipe, jps, jpe, kps, kpe    )
+
+    ! CALL BASE_STATE_PARENT ( parent%Z3d,parent%Q3d,parent%T3d,parent%PSTD,  &
+    !                          parent%PINT,parent%T,parent%Q,parent%CWM,      &
+    !                          parent%FIS,parent%QSH,parent%PD,parent%pdtop,parent%pt,   &
+    !                          parent%ETA1,parent%ETA2,                               &
+    !                          parent%DETA1,parent%DETA2,                             &
+    !                          IDS,IDE,JDS,JDE,KDS,KDE,                                       &
+    !                          IMS,IME,JMS,JME,KMS,KME,                                       &
+    !                          IPS,IPE,JPS,JPE,KPS,KPE                                        )
+
+!   Initialize some more constants required especially for terrain adjustment processes
+
+    nest%PSTD=parent%PSTD
+    nest%KZMAX=KME
+    parent%KZMAX=KME  ! just for safety
+
+!    write(0,*) " nest%imask_nostag "
+!    write(0,"(3X,1X,1000(I3))") (I, I = IPS, MIN(IPE,IDE-1) )
+    DO J = MIN(JPE,JDE-1), JPS, -1
+       IF ( MOD(J,2) /= 0 ) THEN
+!    write(0,"(I3,1X,1000(I3))") J, (nest%imask_nostag(I,J), I = IPS, MIN(IPE,IDE-1) )
+       ELSE
+!    write(0,"(I3,3X,1000(I3))") J, (nest%imask_nostag(I,J), I = IPS, MIN(IPE,IDE-1) )
+       END IF
+    ENDDO
+
+#endif
+
      CALL med_interp_domain( parent, nest )
 
 #if ( EM_CORE == 1 )
