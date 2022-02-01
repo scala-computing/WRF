@@ -3,14 +3,7 @@
 
 PROGRAM real_data
 
-   USE module_machine
-   USE module_domain
-   USE module_initialize_real
-   USE module_io_domain
-   USE module_driver_constants
-   USE module_configure
-   USE module_timing
-   USE module_check_a_mundo
+
 #if ( WRF_CHEM == 1 )
    USE module_input_chem_data
    USE module_input_chem_bioemiss
