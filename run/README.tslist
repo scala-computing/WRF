@@ -6,7 +6,7 @@ the file are regarded as header information, and are used to determine if the
 given coordinates are lat/long or i/j. The contents of an example tslist file 
 for coordinate specification are shown below. 
 
-
+ 
 #-----------------------------------------------#
 # 24 characters for name | pfx |  LAT  |   LON  |
 #-----------------------------------------------#
