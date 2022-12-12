@@ -13,7 +13,7 @@ PROGRAM real_data
    USE module_dm
 #endif
 
-   IMPLICIT NONE
+   IMPLICIT NONE 
 
    REAL    :: time , bdyfrq
 
