@@ -1,4 +1,4 @@
-!  Create an initial data set for the WRF model based on real data.  This
+!  Create an initial data set for the WRF model based on real data.  This retry[1]
 !  program is specifically set up for the NMM core.
 
 PROGRAM real_data
