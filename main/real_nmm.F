@@ -1,4 +1,4 @@
-!  Create an initial data set for the WRF model based on real data.  This retry[1]
+!  Create an initial data set for the WRF model based on real data.  This retry[2]
 !  program is specifically set up for the NMM core.
 
 PROGRAM real_data
@@ -75,7 +75,7 @@ PROGRAM real_data
      END SUBROUTINE Setup_Timekeeping
    END INTERFACE
 
-   !  Define the name of this program (program_name defined in module_domain) 
+   !  Define the name of this program (program_name defined in module_domain)
 
    program_name = "REAL_NMM " // TRIM(release_version) // " PREPROCESSOR"
 
