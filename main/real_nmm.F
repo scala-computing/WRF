@@ -1,4 +1,4 @@
-!  Create an initial data set for the WRF model based on real data.  test-run [14]
+!  Create an initial data set for the WRF model based on real data.  test-run [15]
 !  program is specifically set up for the NMM core.
 
 PROGRAM real_data
