@@ -69,6 +69,10 @@ CONTAINS
    )
 
       USE module_optional_input
+      USE module_radiation_driver, ONLY: cal_cldfra3
+      USE module_dm, ONLY : wrf_dm_max_real
+      use module_madwrf, only : Init_madwrf_clouds, Init_madwrf_tracers
+
       IMPLICIT NONE
 
       !  Input space and data.  No gridded meteorological data has been stored, though.
@@ -116,10 +120,19 @@ CONTAINS
 
       REAL :: p_top_requested , temp
       INTEGER :: num_metgrid_levels
+      INTEGER, PARAMETER :: num_wif_levels_default = 30
+      INTEGER :: aer_init_opt
       REAL , DIMENSION(max_eta) :: eta_levels
 
       INTEGER :: auto_levels_opt
-      REAL :: max_dz, dzbot, dzstretch_s, dzstretch_u, z1, airmass
+      REAL :: max_dz, dzbot, dzstretch_s, dzstretch_u, z1
+
+      INTEGER:: i_end, j_end
+      REAL, ALLOCATABLE, DIMENSION(:):: temp_P, temp_T, temp_R, temp_Dz
+      REAL, ALLOCATABLE, DIMENSION(:):: temp_Qv, temp_Qc, temp_Qi, temp_Qs
+      REAL, ALLOCATABLE, DIMENSION(:):: temp_CF, temp_Nc, temp_Ni
+      REAL:: max_relh, temp_xland, gridkm
+      LOGICAL :: debug_flag = .FALSE.
 
       REAL :: dclat
 
@@ -314,6 +327,44 @@ integer::oops1,oops2
          END IF
       END IF
 
+      grid%bathymetry_flag = flag_bathymetry
+      IF ( flag_bathymetry .EQ. 0 ) THEN
+         IF ( grid%shalwater_z0 .EQ. 1 ) THEN
+             CALL wrf_message ( " Warning: No bathymetry data found for shallow water roughness model." )
+             IF ( grid%shalwater_depth .LE. 0.0 ) THEN
+                CALL wrf_message ( " Warning: shalwater_depth must be greater than 0.0 for WRF to run." )
+             END IF
+         END IF
+         DO j = jts, MIN(jde-1,jte)
+            DO i = its, MIN(ide-1,ite)
+               grid%water_depth(i,j) = -4.0 
+            END DO
+         END DO
+      ELSE
+         CALL wrf_message ( " Bathymetry dataset from GEBCO Compilation Group. Please acknowledge the following in presentations and publications: GEBCO Compilation Group (2021) GEBCO 2021 Grid (doi:10.5285/c6612cbe-50b3-0cff-e053-6c86abc09f8f)." )
+         DO j = jts, MIN(jde-1,jte)
+            DO i = its, MIN(ide-1,ite)
+               grid%water_depth(i,j) = grid%bathymetry(i,j)
+               ! Get depth of lake based on height of water surface:
+               IF   ( grid%lu_index(i,j) .EQ. grid%islake ) THEN
+                  grid%water_depth(i,j) = grid%bathymetry(i,j) - grid%ht_gc(i,j)
+               END IF
+               ! Depth is positive:
+               grid%water_depth(i,j) = -grid%water_depth(i,j)
+               ! Set land cells to -10
+               IF ( ( grid%lu_index(i,j) .NE. grid%islake ) .AND. ( grid%lu_index(i,j) .NE. grid%iswater ) ) THEN
+                  grid%water_depth(i,j) = -2.0
+               ELSE ! Water cells:
+                  ! Find any water cells with negative (originally positive) values...
+                  ! ... indicative of mis-match of bathymetry and land mask.
+                  IF (grid%water_depth(i,j) .LT. 0.1) THEN
+                     grid%water_depth(i,j) = 0.1
+                  END IF
+               END IF
+            END DO
+         END DO
+      END IF
+
       !  Send out a quick message about the time steps based on the map scale factors.
 
       IF ( ( internal_time_loop .EQ. 1 ) .AND. ( grid%id .EQ. 1 ) .AND. &
@@ -379,6 +430,7 @@ integer::oops1,oops2
       hold_ups = ( internal_time_loop .EQ. 1 ) .OR. &
                  ( config_flags%grid_fdda .NE. 0 ) .OR. &
                  ( config_flags%sst_update .EQ. 1 ) .OR. &
+                 ( config_flags%qna_update .EQ. 1 ) .OR. &
                  ( config_flags%all_ic_times ) .OR. &
                  ( config_flags%polar )
 
@@ -398,6 +450,8 @@ integer::oops1,oops2
             WRITE ( a_message,* ) ' ( config_flags%grid_fdda .NE. 0 )           ', ( config_flags%grid_fdda .NE. 0 )
             CALL wrf_message ( a_message )
             WRITE ( a_message,* ) ' ( config_flags%sst_update .EQ. 1 )          ', ( config_flags%sst_update .EQ. 1 )
+            CALL wrf_message ( a_message )
+            WRITE ( a_message,* ) ' ( config_flags%qna_update .EQ. 1 )          ', ( config_flags%qna_update .EQ. 1 )
             CALL wrf_message ( a_message )
             WRITE ( a_message,* ) ' ( config_flags%all_ic_times )               ', ( config_flags%all_ic_times )
             CALL wrf_message ( a_message )
@@ -563,6 +617,15 @@ integer::oops1,oops2
          END IF
       END IF
 
+      IF (config_flags%slucm_distributed_drag) THEN
+        CALL wrf_message('Adding zero-plane displacement height to topography')
+        DO j = jts, MIN(jde - 1, jte)
+        DO i = its, MIN(ide - 1, ite)
+          IF (grid%zd_urb2d(i, j) > 0) grid%ht_gc(i, j) = grid%ht_gc(i, j) + grid%zd_urb2d(i, j)
+        END DO
+        END DO
+      END IF
+
       !  Is there any vertical interpolation to do?  The "old" data comes in on the correct
       !  vertical locations already.
 
@@ -653,6 +716,19 @@ integer::oops1,oops2
          !  model and the hi-res topo from WPS.  We only do this for the
          !  coarse grid since we are going to make the interface consistent
          !  in the model betwixt the CG and FG domains.
+
+         !  An important point is to inform the user if their request cannot
+         !  be satisfied. Do not skip over this quietly.
+
+         IF ( ( config_flags%smooth_cg_topo ) .AND. &
+              ( internal_time_loop .EQ. 1 ) .AND. &
+              ( grid%id .EQ. 1 ) .AND. &
+              ( flag_soilhgt .NE. 1) ) THEN
+            CALL wrf_message    (' --- ERROR: NML option smooth_cg_topo=T')
+            CALL wrf_message    ('            But found no soil elevation / terrain / topography data in metgrid files')
+            CALL wrf_message    ('            The field SOILHGT is required when smoothing the CG topography on d01')
+            CALL wrf_error_fatal('            If using ERA5 data, possibly need to add more time invariant fields')
+         END IF
 
          IF ( ( config_flags%smooth_cg_topo ) .AND. &
               ( internal_time_loop .EQ. 1 ) .AND. &
@@ -1034,6 +1110,7 @@ integer::oops1,oops2
             ELSE
                k = num_metgrid_levels
             END IF
+            config_flags%use_sh_qv = .FALSE.
 
             IF      ( config_flags%rh2qv_method .eq. 1 ) THEN
                CALL rh_to_mxrat1(grid%rh_gc, grid%t_gc, grid%p_gc, grid%qv_gc ,         &
@@ -1114,6 +1191,7 @@ integer::oops1,oops2
          END IF
 
          !  Some data sets do not provide a 3d geopotential height field.  
+         !  This calculation is more accurate if the data is bottom-up.
 
          IF ( grid%ght_gc(i_valid,grid%num_metgrid_levels/2,j_valid) .LT. 1 ) THEN
             DO j = jts, MIN(jte,jde-1)
@@ -1164,6 +1242,15 @@ integer::oops1,oops2
          END DO
 
          IF ( flag_qv .EQ. 1 ) THEN
+            DO j = jts, min(jde-1,jte)
+               DO i = its, min(ide-1,ite)
+                  IF ( skip_middle_points_t ( ids , ide , jds , jde , i , j , em_width , hold_ups ) ) CYCLE
+                  grid%q2(i,j)=grid%qv_gc(i,1,j)
+               END DO
+            END DO
+         END IF
+
+         IF ( flag_sh .EQ. 1 ) THEN
             DO j = jts, min(jde-1,jte)
                DO i = its, min(ide-1,ite)
                   IF ( skip_middle_points_t ( ids , ide , jds , jde , i , j , em_width , hold_ups ) ) CYCLE
@@ -1263,6 +1350,11 @@ integer::oops1,oops2
                                 ims , ime , jms , jme , kms , kme , &
                                 its , ite , jts , jte , kts , kte )
 
+         CALL monthly_avg ( grid%greenfrac , grid%shdavg , &
+                                ids , ide , jds , jde , kds , kde , &
+                                ims , ime , jms , jme , kms , kme , &
+                                its , ite , jts , jte , kts , kte )
+
          !  The model expects the green-ness and vegetation fraction values to be in percent, not fraction.
 
          DO j = jts, MIN(jte,jde-1)
@@ -1271,7 +1363,8 @@ integer::oops1,oops2
               grid%vegfra(i,j) = grid%vegfra(i,j) * 100.
               grid%shdmax(i,j) = grid%shdmax(i,j) * 100.
               grid%shdmin(i,j) = grid%shdmin(i,j) * 100.
-           END DO
+              grid%shdavg(i,j) = grid%shdavg(i,j) * 100.
+              END DO
          END DO
 
          !  The model expects the albedo fields as a fraction, not a percent.  Set the
@@ -1288,77 +1381,6 @@ integer::oops1,oops2
                END IF
             END DO
          END DO
-
-         !  Added by G. Thompson 2013Sep10
-         !  Interpolate monthly aerosol climatology data to specific date/time.
-         !  Since data are 3D, do over a loop of vertical levels using temporary array space.
-
-         IF (config_flags%mp_physics.eq.THOMPSONAERO .and. P_QNWFA.gt.1 .and. config_flags%use_aero_icbc) then
-         CALL wrf_debug ( 0 , 'Using Thompson_aerosol_aware so using QNWFA monthly climo arrays to create QNWFA_now')
-         DO k = 1, num_metgrid_levels
-            DO j = jts, MIN(jte,jde-1)
-               DO i = its, MIN(ite,ide-1)
-                  grid%qntemp(i, 1, j) = grid%QNWFA_jan(i,k,j)
-                  grid%qntemp(i, 2, j) = grid%QNWFA_feb(i,k,j)
-                  grid%qntemp(i, 3, j) = grid%QNWFA_mar(i,k,j)
-                  grid%qntemp(i, 4, j) = grid%QNWFA_apr(i,k,j)
-                  grid%qntemp(i, 5, j) = grid%QNWFA_may(i,k,j)
-                  grid%qntemp(i, 6, j) = grid%QNWFA_jun(i,k,j)
-                  grid%qntemp(i, 7, j) = grid%QNWFA_jul(i,k,j)
-                  grid%qntemp(i, 8, j) = grid%QNWFA_aug(i,k,j)
-                  grid%qntemp(i, 9, j) = grid%QNWFA_sep(i,k,j)
-                  grid%qntemp(i,10, j) = grid%QNWFA_oct(i,k,j)
-                  grid%qntemp(i,11, j) = grid%QNWFA_nov(i,k,j)
-                  grid%qntemp(i,12, j) = grid%QNWFA_dec(i,k,j)
-               ENDDO
-            ENDDO
-
-            CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
-                                          ids , ide , jds , jde , kds , kde , &
-                                          ims , ime , jms , jme , kms , kme , &
-                                          its , ite , jts , jte , kts , kte )
-
-            DO j = jts, MIN(jte,jde-1)
-               DO i = its, MIN(ite,ide-1)
-                  grid%QNWFA_now(i,k,j) = grid%qntemp2(i,j)
-     if(i.eq.its .and. j.eq.jts .and. k.eq.1) then
-      write(a_message,*) '  DEBUG, ensuring QNWFA_now corner (its,1,jts) value: ', i,j,grid%QNWFA_now(i,k,j)
-      CALL wrf_debug (1, a_message)
-     endif
-               ENDDO
-            ENDDO
-         ENDDO
-         ENDIF
-
-         IF (config_flags%mp_physics.eq.THOMPSONAERO .and. P_QNIFA.gt.1 .and. config_flags%use_aero_icbc) then
-         DO k = 1, num_metgrid_levels
-            DO j = jts, MIN(jte,jde-1)
-               DO i = its, MIN(ite,ide-1)
-                  grid%qntemp(i, 1, j) = grid%QNIFA_jan(i,k,j)
-                  grid%qntemp(i, 2, j) = grid%QNIFA_feb(i,k,j)
-                  grid%qntemp(i, 3, j) = grid%QNIFA_mar(i,k,j)
-                  grid%qntemp(i, 4, j) = grid%QNIFA_apr(i,k,j)
-                  grid%qntemp(i, 5, j) = grid%QNIFA_may(i,k,j)
-                  grid%qntemp(i, 6, j) = grid%QNIFA_jun(i,k,j)
-                  grid%qntemp(i, 7, j) = grid%QNIFA_jul(i,k,j)
-                  grid%qntemp(i, 8, j) = grid%QNIFA_aug(i,k,j)
-                  grid%qntemp(i, 9, j) = grid%QNIFA_sep(i,k,j)
-                  grid%qntemp(i,10, j) = grid%QNIFA_oct(i,k,j)
-                  grid%qntemp(i,11, j) = grid%QNIFA_nov(i,k,j)
-                  grid%qntemp(i,12, j) = grid%QNIFA_dec(i,k,j)
-               ENDDO
-            ENDDO
-            CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
-                                          ids , ide , jds , jde , kds , kde , &
-                                          ims , ime , jms , jme , kms , kme , &
-                                          its , ite , jts , jte , kts , kte )
-            DO j = jts, MIN(jte,jde-1)
-               DO i = its, MIN(ite,ide-1)
-                  grid%QNIFA_now(i,k,j) = grid%qntemp2(i,j)
-               ENDDO
-            ENDDO
-         ENDDO
-         ENDIF
 
          !  Two ways to get the surface pressure.  1) If we have the low-res input surface
          !  pressure and the low-res topography, then we can do a simple hydrostatic
@@ -1712,6 +1734,23 @@ integer::oops1,oops2
                             ims , ime , jms , jme , kms , kme , &
                             its , ite , jts , jte , kts , kte )
 
+         ! when specific humidity is available, qv_gc is computed from sh_gc
+         IF (config_flags%use_sh_qv .and. (flag_sh .eq. 1 .or. flag_qv .eq. 1)) THEN
+         CALL vert_interp ( grid%qv_gc , grid%pd_gc , moist(:,:,:,P_QV) , grid%pb , &
+                            grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                            grid%pmaxwnn , grid%ptropnn , &
+                            0 , 0 , &
+                            config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                            config_flags%maxw_above_this_level , &
+                            num_metgrid_levels , 'Q' , &
+                            interp_type , lagrange_order , extrap_type , &
+                            lowest_lev_from_sfc , use_levels_below_ground , use_surface , &
+                            zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                            ids , ide , jds , jde , kds , kde , &
+                            ims , ime , jms , jme , kms , kme , &
+                            its , ite , jts , jte , kts , kte )
+         END IF
+
          !  If this is theta being interpolated, AND we have extra levels for temperature,
          !  convert those extra levels (trop and max wind) to potential temp.
 
@@ -1782,6 +1821,8 @@ integer::oops1,oops2
                               its , ite , jts , jte , kts , kte )
          END IF
 
+         ! do not compute qv from RH if flag_sh or flag_qv = 1, or use_sh_qv = F
+         IF      ( .not.config_flags%use_sh_qv ) THEN
          IF      ( config_flags%rh2qv_method .eq. 1 ) THEN
             CALL rh_to_mxrat1(grid%u_1, grid%v_1, grid%p , moist(:,:,:,P_QV) ,       &
                               config_flags%rh2qv_wrt_liquid ,                        &
@@ -1802,6 +1843,7 @@ integer::oops1,oops2
                               ids , ide , jds , jde , kds , kde ,                    &
                               ims , ime , jms , jme , kms , kme ,                    &
                               its , ite , jts , jte , kts , kte-1 )
+         END IF
          END IF
 
          IF ( .NOT. config_flags%interp_theta ) THEN
@@ -2074,112 +2116,6 @@ integer::oops1,oops2
             END DO
          END IF
 
-!..If we have number of water-friendly aerosols from monthly climo data, interpolate to WRF model levels.
-
-         IF ( flag_qnwfa .EQ. 1 .and. (config_flags%use_aero_icbc.or.config_flags%use_rap_aero_icbc)) THEN
-            DO im = PARAM_FIRST_SCALAR, num_3d_s
-               IF ( im .EQ. P_QNWFA ) THEN
-                if(config_flags%use_rap_aero_icbc) then
-!HRRR - aerosol input from WPS
-                  CALL wrf_debug ( 0 , 'Using Thompson_aerosol_aware so vertically-interpolating QNWFA from WPS data to fill scalar')
-                  CALL vert_interp ( grid%qnwfa_gc , grid%pd_gc , scalar(:,:,:,P_QNWFA) , grid%pb , &
-                                     grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                     grid%pmaxwnn , grid%ptropnn , &
-                                     0 , 0 , &
-                                     config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                     config_flags%maxw_above_this_level , &
-                                     num_metgrid_levels , 'Q' , &
-                                     interp_type , linear_interp , extrap_type , &
-                                     .false. , use_levels_below_ground , use_surface , &
-                                     zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                     ids , ide , jds , jde , kds , kde , &
-                                     ims , ime , jms , jme , kms , kme , &
-                                     its , ite , jts , jte , kts , kte )
-
-                else
-                  CALL wrf_debug ( 0 , 'Using Thompson_aerosol_aware so vertically-interpolating QNWFA monthly climo arrays to fill scalar')
-                  CALL vert_interp ( grid%QNWFA_now , grid%pd_gc , scalar(:,:,:,P_QNWFA) , grid%pb , &
-                                     grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                     grid%pmaxwnn , grid%ptropnn , &
-                                     0 , 0 , &
-                                     config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                     config_flags%maxw_above_this_level , &
-                                     num_metgrid_levels , 'Q' , &
-                                     interp_type , linear_interp , extrap_type , &
-                                     .false. , use_levels_below_ground , use_surface , &
-                                     zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                     ids , ide , jds , jde , kds , kde , &
-                                     ims , ime , jms , jme , kms , kme , &
-                                     its , ite , jts , jte , kts , kte )
-                endif
-               END IF
-            END DO
-         ELSEIF ( flag_qnwfa .EQ. 1 .and. (.NOT. config_flags%use_aero_icbc)) THEN
-            DO im = PARAM_FIRST_SCALAR, num_3d_s
-               IF ( im .EQ. P_QNWFA ) THEN
-                  DO j = jts, MIN(jte,jde-1)
-                     DO k = kts, kte
-                        DO i = its, MIN(ite,ide-1)
-                           scalar(i,k,j,P_QNWFA) = 0.
-                        END DO
-                     END DO
-                  END DO
-               END IF
-            END DO
-         END IF
-
-!..If we have number of ice-friendly aerosols from monthly climo data, interpolate to WRF model levels.
-
-         IF ( flag_qnifa .EQ. 1 .and. (config_flags%use_aero_icbc.or.config_flags%use_rap_aero_icbc)) THEN
-            DO im = PARAM_FIRST_SCALAR, num_3d_s
-               IF ( im .EQ. P_QNIFA ) THEN
-                if(config_flags%use_rap_aero_icbc) then
-! HRRR - aerosol input from WPS
-                  CALL vert_interp ( grid%qnifa_gc , grid%pd_gc , scalar(:,:,:,P_QNIFA) , grid%pb , &
-                                     grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                     grid%pmaxwnn , grid%ptropnn , &
-                                     0 , 0 , &
-                                     config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                     config_flags%maxw_above_this_level , &
-                                     num_metgrid_levels , 'Q' , &
-                                     interp_type , linear_interp , extrap_type , &
-                                     .false. , use_levels_below_ground , use_surface , &
-                                     zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                     ids , ide , jds , jde , kds , kde , &
-                                     ims , ime , jms , jme , kms , kme , &
-                                     its , ite , jts , jte , kts , kte )
-
-                else
-                  CALL vert_interp ( grid%QNIFA_now , grid%pd_gc , scalar(:,:,:,P_QNIFA) , grid%pb , &
-                                     grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                     grid%pmaxwnn , grid%ptropnn , &
-                                     0 , 0 , &
-                                     config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                     config_flags%maxw_above_this_level , &
-                                     num_metgrid_levels , 'Q' , &
-                                     interp_type , linear_interp , extrap_type , &
-                                     .false. , use_levels_below_ground , use_surface , &
-                                     zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                     ids , ide , jds , jde , kds , kde , &
-                                     ims , ime , jms , jme , kms , kme , &
-                                     its , ite , jts , jte , kts , kte )
-                endif
-               END IF
-            END DO
-         ELSEIF ( flag_qnifa .EQ. 1 .and. (.NOT. config_flags%use_aero_icbc)) THEN
-            DO im = PARAM_FIRST_SCALAR, num_3d_s
-               IF ( im .EQ. P_QNIFA ) THEN
-                  DO j = jts, MIN(jte,jde-1)
-                     DO k = kts, kte
-                        DO i = its, MIN(ite,ide-1)
-                           scalar(i,k,j,P_QNIFA) = 0.
-                        END DO
-                     END DO
-                  END DO
-               END IF
-            END DO
-         END IF
-
 !=========================================================================================
 !    START OF OPTIONAL 3D DATA, USUALLY AEROSOLS
 !=========================================================================================
@@ -2374,212 +2310,431 @@ integer::oops1,oops2
          END IF
 #endif
 
-         !  Do we have the old data that came in on the same vertical levels as the other
-         !  met variables? If so, we can skip all of this interpolation, as the pressure field
-         !  is allocated, but all zeros.
- 
-         IF ( config_flags%wif_input_opt .EQ. 1 ) THEN
-         IF ( ( config_flags%num_wif_levels .GT. 0 ) .AND. &
-              ( ABS(grid %p_wif_jan(its,config_flags%num_wif_levels/2,jts)) .GT. 1 ) ) THEN
-
             ! OPTIONAL DATA #2: Thompson Water-Friendly Ice-Friendly Aerosols
             !       Pressure name (assumed to end with _jan, _feb, _mar, ..., _nov, _dec): p_wif
             !       Number of vertical levels: num_wif_levels
             !       Variable names (assumed to end with _jan, _feb, _mar, ..., _nov, _dec): w_wif, i_wif
-            !       Option to interpolate data: wif_input_opt = 1
+            !       Option to interpolate data: wif_input_opt = 1 (water and ice friendly aerosols)
+            !                                                 = 2 (water and ice friendly + black carbon aerosols)
             !       Stored in scalar arrays, tested and assumed to be upside down.
+            !  There are two data fields plus pressure - they are 3d, so no easy way to loop over them.
+            !  QNWFA - Number concentration water-friendly aerosols
+            !  QNIFA - Number concentration ice-friendly aerosols
+            !  QNBCA - Number concentration black carbon aerosols
 
-            IF ( ( config_flags%wif_input_opt .EQ. 1 ) .AND. &
-                 ( config_flags%mp_physics .EQ. THOMPSONAERO ) .AND. &
-                 ( flag_qnwfa .EQ. 1 ) .AND.  &
-                 ( flag_qnifa .EQ. 1 ) ) THEN
+            aer_init_opt = config_flags%aer_init_opt
 
-               CALL wrf_debug ( 0 , 'Using monthly Water-Friendly and Ice-Friendly aerosols from metgrid input file' )
+            if_thompsonaero_3d: IF (config_flags%mp_physics .EQ. THOMPSONAERO .AND. &
+                config_flags%wif_input_opt .GT. 0) THEN
 
-               !  There are two data fields plus pressure - they are 3d, so no easy way to loop over them.
-               !  QNWFA - Number concentration water-friendly aerosols
-               !  QNIFA - Number concentration ice-friendly aerosols
+            select_aer_init_opt_3d: select case (aer_init_opt)
 
-               !  First, get the pressure temporally interpolated to the correct date/time since
-               !  this is a hybrid coordinate (not isobaric), and the pressure changes by month.
-               !  NOTE: The input pressure is not vertically interpolated, but the other two input   
-               !  fields (QNWFA, QNIFA) are interpolated to the WRF eta coordinate.
+               case (0)  ! Initialize to zero
 
-               IF ( grid%p_wif_jan(its,config_flags%num_wif_levels/2-1,jts) - &
-                    grid%p_wif_jan(its,config_flags%num_wif_levels/2+1,jts) .LT. 0 ) THEN
-                  wif_upside_down = .TRUE.
-               END IF
-
-               DO k = 1, config_flags%num_wif_levels
-                  DO j = jts, MIN(jte,jde-1)
-                     DO i = its, MIN(ite,ide-1)
-                        grid%qntemp(i, 1, j) = grid %p_wif_jan(i,k,j)
-                        grid%qntemp(i, 2, j) = grid %p_wif_feb(i,k,j)
-                        grid%qntemp(i, 3, j) = grid %p_wif_mar(i,k,j)
-                        grid%qntemp(i, 4, j) = grid %p_wif_apr(i,k,j)
-                        grid%qntemp(i, 5, j) = grid %p_wif_may(i,k,j)
-                        grid%qntemp(i, 6, j) = grid %p_wif_jun(i,k,j)
-                        grid%qntemp(i, 7, j) = grid %p_wif_jul(i,k,j)
-                        grid%qntemp(i, 8, j) = grid %p_wif_aug(i,k,j)
-                        grid%qntemp(i, 9, j) = grid %p_wif_sep(i,k,j)
-                        grid%qntemp(i,10, j) = grid %p_wif_oct(i,k,j)
-                        grid%qntemp(i,11, j) = grid %p_wif_nov(i,k,j)
-                        grid%qntemp(i,12, j) = grid %p_wif_dec(i,k,j)
-                     END DO
+                  CALL wrf_debug (0 , 'COMMENT: QNWFA and QNIFA will be initialized to zero values')
+                  DO im = PARAM_FIRST_SCALAR, num_3d_s
+                     IF ( im .EQ. P_QNWFA .or. im .EQ. P_QNIFA) THEN
+                        DO j = jts, MIN(jte,jde-1)
+                           DO k = kts, kte
+                              DO i = its, MIN(ite,ide-1)
+                                 scalar(i,k,j,im) = 0.0
+                              END DO
+                           END DO
+                        END DO
+                     END IF
                   END DO
-                  CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
-                                                ids , ide , jds , jde , kds , kde , &
-                                                ims , ime , jms , jme , kms , kme , &
-                                                its , ite , jts , jte , kts , kte )
-                  IF      (       wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %p_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+
+               case (1)  ! Monthly climatology (GOCART, etc.)
+
+                  CALL wrf_debug (0 , 'COMMENT: Using monthly climatology aerosols')
+
+                  !  First, get the pressure temporally interpolated to the correct date/time since
+                  !  this is a hybrid coordinate (not isobaric), and the pressure changes by month.
+                  !  NOTE: The input pressure is not vertically interpolated, but the other two input   
+                  !  fields (QNWFA, QNIFA) are interpolated to the WRF eta coordinate.
+
+                  do_pres_cl: if (flag_qnwfa_cl .EQ. 1 .and. flag_qnifa_cl .EQ. 1) then
+                     if (config_flags%num_wif_levels .EQ. num_wif_levels_default) then
+                        IF ( grid%p_wif_jan(its,config_flags%num_wif_levels/2-1,jts) - &
+                           grid%p_wif_jan(its,config_flags%num_wif_levels/2+1,jts) .LT. 0 ) THEN
+                           wif_upside_down = .TRUE.
+                        END IF
+
+                        DO k = 1, config_flags%num_wif_levels
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid%qntemp(i, 1, j) = grid %p_wif_jan(i,k,j)
+                                 grid%qntemp(i, 2, j) = grid %p_wif_feb(i,k,j)
+                                 grid%qntemp(i, 3, j) = grid %p_wif_mar(i,k,j)
+                                 grid%qntemp(i, 4, j) = grid %p_wif_apr(i,k,j)
+                                 grid%qntemp(i, 5, j) = grid %p_wif_may(i,k,j)
+                                 grid%qntemp(i, 6, j) = grid %p_wif_jun(i,k,j)
+                                 grid%qntemp(i, 7, j) = grid %p_wif_jul(i,k,j)
+                                 grid%qntemp(i, 8, j) = grid %p_wif_aug(i,k,j)
+                                 grid%qntemp(i, 9, j) = grid %p_wif_sep(i,k,j)
+                                 grid%qntemp(i,10, j) = grid %p_wif_oct(i,k,j)
+                                 grid%qntemp(i,11, j) = grid %p_wif_nov(i,k,j)
+                                 grid%qntemp(i,12, j) = grid %p_wif_dec(i,k,j)
+                              END DO
+                           END DO
+                           CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
+                                                         ids , ide , jds , jde , kds , kde , &
+                                                         ims , ime , jms , jme , kms , kme , &
+                                                         its , ite , jts , jte , kts , kte )
+                           IF      (       wif_upside_down ) THEN
+                              DO j = jts, MIN(jte,jde-1)
+                                 DO i = its, MIN(ite,ide-1)
+                                    grid %p_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+                                 END DO
+                              END DO
+                           ELSE IF ( .NOT. wif_upside_down ) THEN
+                              DO j = jts, MIN(jte,jde-1)
+                                 DO i = its, MIN(ite,ide-1)
+                                    grid %p_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+                                 END DO
+                              END DO
+                           END IF
                         END DO
-                     END DO
-                  ELSE IF ( .NOT. wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %p_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+                     else
+                        CALL wrf_error_fatal ('mp_physics=28 and use_aero_icbc=.true. but wrong num_wif_levels, please set =30')
+                     end if
+                  else
+                     CALL wrf_error_fatal ('mp_physics=28 and use_aero_icbc=.true. but aerosol climatology field(s) missing' )
+                  end if do_pres_cl
+
+                    ! Water-friendly aerosol
+                  do_qnwfa_cl: if (flag_qnwfa_cl .EQ. 1) then
+                     DO k = 1, config_flags%num_wif_levels
+                        DO j = jts, MIN(jte,jde-1)
+                           DO i = its, MIN(ite,ide-1)
+                              grid%qntemp(i, 1, j) = grid %w_wif_jan(i,k,j)
+                              grid%qntemp(i, 2, j) = grid %w_wif_feb(i,k,j)
+                              grid%qntemp(i, 3, j) = grid %w_wif_mar(i,k,j)
+                              grid%qntemp(i, 4, j) = grid %w_wif_apr(i,k,j)
+                              grid%qntemp(i, 5, j) = grid %w_wif_may(i,k,j)
+                              grid%qntemp(i, 6, j) = grid %w_wif_jun(i,k,j)
+                              grid%qntemp(i, 7, j) = grid %w_wif_jul(i,k,j)
+                              grid%qntemp(i, 8, j) = grid %w_wif_aug(i,k,j)
+                              grid%qntemp(i, 9, j) = grid %w_wif_sep(i,k,j)
+                              grid%qntemp(i,10, j) = grid %w_wif_oct(i,k,j)
+                              grid%qntemp(i,11, j) = grid %w_wif_nov(i,k,j)
+                              grid%qntemp(i,12, j) = grid %w_wif_dec(i,k,j)
+                           END DO
                         END DO
+                        CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
+                                                      ids , ide , jds , jde , kds , kde , &
+                                                      ims , ime , jms , jme , kms , kme , &
+                                                      its , ite , jts , jte , kts , kte )
+                        IF      (       wif_upside_down ) THEN
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid %w_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+                              END DO
+                           END DO
+                        ELSE IF ( .NOT. wif_upside_down ) THEN
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid %w_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+                              END DO
+                           END DO
+                        END IF
                      END DO
-                  END IF
-               END DO
 
-               DO k = 1, config_flags%num_wif_levels
-                  DO j = jts, MIN(jte,jde-1)
-                     DO i = its, MIN(ite,ide-1)
-                        grid%qntemp(i, 1, j) = grid %w_wif_jan(i,k,j)
-                        grid%qntemp(i, 2, j) = grid %w_wif_feb(i,k,j)
-                        grid%qntemp(i, 3, j) = grid %w_wif_mar(i,k,j)
-                        grid%qntemp(i, 4, j) = grid %w_wif_apr(i,k,j)
-                        grid%qntemp(i, 5, j) = grid %w_wif_may(i,k,j)
-                        grid%qntemp(i, 6, j) = grid %w_wif_jun(i,k,j)
-                        grid%qntemp(i, 7, j) = grid %w_wif_jul(i,k,j)
-                        grid%qntemp(i, 8, j) = grid %w_wif_aug(i,k,j)
-                        grid%qntemp(i, 9, j) = grid %w_wif_sep(i,k,j)
-                        grid%qntemp(i,10, j) = grid %w_wif_oct(i,k,j)
-                        grid%qntemp(i,11, j) = grid %w_wif_nov(i,k,j)
-                        grid%qntemp(i,12, j) = grid %w_wif_dec(i,k,j)
-                     END DO
-                  END DO
-                  CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
-                                                ids , ide , jds , jde , kds , kde , &
-                                                ims , ime , jms , jme , kms , kme , &
-                                                its , ite , jts , jte , kts , kte )
-                  IF      (       wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %w_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+                     CALL wrf_debug (0 , 'Vertically-interpolating QNWFA climatology from WPS data to fill scalar')
+                     CALL vert_interp ( grid %w_wif_now , grid%p_wif_now , scalar(:,:,:,P_qnwfa) , grid%pb , &
+                                        grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                        grid%pmaxwnn , grid%ptropnn , &
+                                        0 , 0 , &
+                                        config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                        config_flags%maxw_above_this_level , &
+                                        config_flags%num_wif_levels , 'Q' , &
+                                        interp_type , linear_interp , extrap_type , &
+                                        .false. , use_levels_below_ground , use_surface , &
+                                        zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                        ids , ide , jds , jde , kds , kde , &
+                                        ims , ime , jms , jme , kms , kme , &
+                                        its , ite , jts , jte , kts , kte )
+                  else
+                     CALL wrf_error_fatal ('mp_physics=28 but there is not QNWFA aerosol information from climatology' )
+                  end if do_qnwfa_cl
+
+                    ! Ice-friendly aerosol
+                  do_qnifa_cl: if (flag_qnifa_cl .EQ. 1) then
+                     DO k = 1, config_flags%num_wif_levels
+                        WRITE(a_message,*) '  transferring each K-level ', k, ' to QNIFA, sample Jan data, ', grid %i_wif_jan(its,k,jts)
+                        CALL wrf_debug ( 1 , a_message)
+                        DO j = jts, MIN(jte,jde-1)
+                           DO i = its, MIN(ite,ide-1)
+                              grid%qntemp(i, 1, j) = grid %i_wif_jan(i,k,j)
+                              grid%qntemp(i, 2, j) = grid %i_wif_feb(i,k,j)
+                              grid%qntemp(i, 3, j) = grid %i_wif_mar(i,k,j)
+                              grid%qntemp(i, 4, j) = grid %i_wif_apr(i,k,j)
+                              grid%qntemp(i, 5, j) = grid %i_wif_may(i,k,j)
+                              grid%qntemp(i, 6, j) = grid %i_wif_jun(i,k,j)
+                              grid%qntemp(i, 7, j) = grid %i_wif_jul(i,k,j)
+                              grid%qntemp(i, 8, j) = grid %i_wif_aug(i,k,j)
+                              grid%qntemp(i, 9, j) = grid %i_wif_sep(i,k,j)
+                              grid%qntemp(i,10, j) = grid %i_wif_oct(i,k,j)
+                              grid%qntemp(i,11, j) = grid %i_wif_nov(i,k,j)
+                              grid%qntemp(i,12, j) = grid %i_wif_dec(i,k,j)
+                           END DO
                         END DO
+                        IF ( k .EQ. 1 ) THEN
+                           WRITE(a_message,*) ' QNIFA (jan and feb) ', grid%qntemp(its,1,jts),grid%qntemp(its,2,jts)
+                           CALL wrf_debug ( 1 , a_message)
+                        END IF
+                        CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
+                                                      ids , ide , jds , jde , kds , kde , &
+                                                      ims , ime , jms , jme , kms , kme , &
+                                                      its , ite , jts , jte , kts , kte )
+                        IF ( k .eq. 1 ) THEN
+                           write(a_message,*) ' QNIFA (now) ', grid%qntemp2(its,jts)
+                           CALL wrf_debug ( 1 , a_message)
+                        END IF
+                        IF      (       wif_upside_down ) THEN
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid %i_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+                              END DO
+                           END DO
+                        ELSE IF ( .NOT. wif_upside_down ) THEN
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid %i_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+                              END DO
+                           END DO
+                        END IF
                      END DO
-                  ELSE IF ( .NOT. wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %w_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+
+                     CALL wrf_debug (0 , 'Vertically-interpolating QNIFA climatology from WPS data to fill scalar')
+                     CALL vert_interp ( grid %i_wif_now , grid%p_wif_now , scalar(:,:,:,P_qnifa) , grid%pb , &
+                                        grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                        grid%pmaxwnn , grid%ptropnn , &
+                                        0 , 0 , &
+                                        config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                        config_flags%maxw_above_this_level , &
+                                        config_flags%num_wif_levels , 'Q' , &
+                                        interp_type , linear_interp , extrap_type , &
+                                        .false. , use_levels_below_ground , use_surface , &
+                                        zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                        ids , ide , jds , jde , kds , kde , &
+                                        ims , ime , jms , jme , kms , kme , &
+                                        its , ite , jts , jte , kts , kte )
+                  else
+                     CALL wrf_error_fatal ('mp_physics=28 but there is not QNIFA aerosol information from climatology' )
+                  end if do_qnifa_cl
+
+                    ! Black carbon aerosol
+                  if (config_flags%wif_input_opt .EQ. 2) then
+                     do_qnbca_cl: if (flag_qnbca_cl .EQ. 1) then
+                        DO k = 1, config_flags%num_wif_levels
+                           WRITE(a_message,*) '  transferring each K-level ', k, ' to QNBCA, sample Jan data, ', grid %b_wif_jan(its,k,jts)
+                           CALL wrf_debug ( 1 , a_message)
+                           DO j = jts, MIN(jte,jde-1)
+                              DO i = its, MIN(ite,ide-1)
+                                 grid%qntemp(i, 1, j) = grid %b_wif_jan(i,k,j)
+                                 grid%qntemp(i, 2, j) = grid %b_wif_feb(i,k,j)
+                                 grid%qntemp(i, 3, j) = grid %b_wif_mar(i,k,j)
+                                 grid%qntemp(i, 4, j) = grid %b_wif_apr(i,k,j)
+                                 grid%qntemp(i, 5, j) = grid %b_wif_may(i,k,j)
+                                 grid%qntemp(i, 6, j) = grid %b_wif_jun(i,k,j)
+                                 grid%qntemp(i, 7, j) = grid %b_wif_jul(i,k,j)
+                                 grid%qntemp(i, 8, j) = grid %b_wif_aug(i,k,j)
+                                 grid%qntemp(i, 9, j) = grid %b_wif_sep(i,k,j)
+                                 grid%qntemp(i,10, j) = grid %b_wif_oct(i,k,j)
+                                 grid%qntemp(i,11, j) = grid %b_wif_nov(i,k,j)
+                                 grid%qntemp(i,12, j) = grid %b_wif_dec(i,k,j)
+                              END DO
+                           END DO
+                           IF ( k .EQ. 1 ) THEN
+                              WRITE(a_message,*) ' QNBCA (jan and feb) ', grid%qntemp(its,1,jts),grid%qntemp(its,2,jts)
+                              CALL wrf_debug ( 1 , a_message)
+                           END IF
+                           CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
+                                                         ids , ide , jds , jde , kds , kde , &
+                                                         ims , ime , jms , jme , kms , kme , &
+                                                         its , ite , jts , jte , kts , kte )
+                           IF ( k .eq. 1 ) THEN
+                              write(a_message,*) ' QNBCA (now) ', grid%qntemp2(its,jts)
+                              CALL wrf_debug ( 1 , a_message)
+                           END IF
+                           IF      (       wif_upside_down ) THEN
+                              DO j = jts, MIN(jte,jde-1)
+                                 DO i = its, MIN(ite,ide-1)
+                                    grid %b_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
+                                 END DO
+                              END DO
+                           ELSE IF ( .NOT. wif_upside_down ) THEN
+                              DO j = jts, MIN(jte,jde-1)
+                                 DO i = its, MIN(ite,ide-1)
+                                    grid %b_wif_now(i,                              k,j) = grid%qntemp2(i,j)
+                                 END DO
+                              END DO
+                           END IF
                         END DO
-                     END DO
-                  END IF
-               END DO
 
-               !..Capture the monthly climatology value for the lowest level because we use later to compute surface flux value.
+                        CALL wrf_debug (0 , 'Vertically-interpolating QNBCA climatology from WPS data to fill scalar')
+                        CALL vert_interp ( grid %b_wif_now , grid%p_wif_now , scalar(:,:,:,P_qnbca) , grid%pb , &
+                                           grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                           grid%pmaxwnn , grid%ptropnn , &
+                                           0 , 0 , &
+                                           config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                           config_flags%maxw_above_this_level , &
+                                           config_flags%num_wif_levels , 'Q' , &
+                                           interp_type , linear_interp , extrap_type , &
+                                           .false. , use_levels_below_ground , use_surface , &
+                                           zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                           ids , ide , jds , jde , kds , kde , &
+                                           ims , ime , jms , jme , kms , kme , &
+                                           its , ite , jts , jte , kts , kte )
+                     else
+                        CALL wrf_error_fatal ('mp_physics=28 and wif_input_opt=2 but there is not QNBCA aerosol information from climatology' )
+                     end if do_qnbca_cl
+                  end if
 
-               DO j = jts, MIN(jte,jde-1)
-                  DO i = its, MIN(ite,ide-1)
-                     grid%QNWFA_now(i,1,j) = grid%w_wif_now(i,1,j)
-                  END DO
-               END DO
+               case (2)  ! First guess aerosol (GEOS-5, etc.)
 
-               CALL vert_interp ( grid %w_wif_now , grid%p_wif_now , scalar(:,:,:,P_qnwfa) , grid%pb , &
-                                  grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                  grid%pmaxwnn , grid%ptropnn , &
-                                  0 , 0 , &
-                                  config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                  config_flags%maxw_above_this_level , &
-                                  config_flags%num_wif_levels , 'Q' , &
-                                  interp_type , linear_interp , extrap_type , &
-                                  .false. , use_levels_below_ground , use_surface , &
-                                  zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                  ids , ide , jds , jde , kds , kde , &
-                                  ims , ime , jms , jme , kms , kme , &
-                                  its , ite , jts , jte , kts , kte )
+                  CALL wrf_debug (0 , 'COMMENT: Using first guess aerosols')
 
+                    ! Water-friendly aerosol
+                  do_qnwfa: if (flag_qnwfa .EQ. 1) then
+                     if (flag_p_wif .EQ. 1 ) then  ! Interpolate according to native pressure field from aerosol forcing model
+                        CALL wrf_debug (0 , 'Vertically-interpolating QNWFA first guess from WPS data to fill scalar using native pressure field')
+                        CALL wrf_debug (0 , 'COMMENT: BE SURE num_wif_levels IN NAMELIST EQUALS num_wif_levels IN MET_EM FILES!')
+                        CALL vert_interp ( grid%qnwfa_gc , grid%p_wif_gc , scalar(:,:,:,P_QNWFA) , grid%pb , &
+                                           grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                           grid%pmaxwnn , grid%ptropnn , &
+                                           0 , 0 , &
+                                           config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                           config_flags%maxw_above_this_level , &
+                                           config_flags%num_wif_levels , 'Q' , &
+                                           interp_type , linear_interp , extrap_type , &
+                                           .false. , use_levels_below_ground , use_surface , &
+                                           zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                           ids , ide , jds , jde , kds , kde , &
+                                           ims , ime , jms , jme , kms , kme , &
+                                           its , ite , jts , jte , kts , kte )
+                     else  ! Interpolate according to metgrid pressure field
+                        if (config_flags%num_wif_levels .EQ. num_metgrid_levels) then  ! Check to make sure that the number of aerosol levels is consistent with the metgrid pressure levels
+                           CALL wrf_debug (0 , 'Vertically-interpolating QNWFA first guess from WPS data to fill scalar using metgrid pressure field')
+                           CALL vert_interp ( grid%qnwfa_gc , grid%pd_gc , scalar(:,:,:,P_QNWFA) , grid%pb , &
+                                              grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                              grid%pmaxwnn , grid%ptropnn , &
+                                              0 , 0 , &
+                                              config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                              config_flags%maxw_above_this_level , &
+                                              config_flags%num_wif_levels , 'Q' , &
+                                              interp_type , linear_interp , extrap_type , &
+                                              .false. , use_levels_below_ground , use_surface , &
+                                              zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                              ids , ide , jds , jde , kds , kde , &
+                                              ims , ime , jms , jme , kms , kme , &
+                                              its , ite , jts , jte , kts , kte )
+                        else
+                           CALL wrf_error_fatal ('num_wif_levels not equal to num_metgrid_levels')
+                        end if
+                     end if
+                  else
+                     CALL wrf_error_fatal ('mp_physics=28 but there is not QNWFA aerosol information from first guess' )
+                  end if do_qnwfa
 
-               DO k = 1, config_flags%num_wif_levels
-                  WRITE(a_message,*) '  transferring each K-level ', k, ' to QNIFA, sample Jan data, ', grid %i_wif_jan(its,k,jts)
-                  CALL wrf_debug ( 1 , a_message)
-                  DO j = jts, MIN(jte,jde-1)
-                     DO i = its, MIN(ite,ide-1)
-                        grid%qntemp(i, 1, j) = grid %i_wif_jan(i,k,j)
-                        grid%qntemp(i, 2, j) = grid %i_wif_feb(i,k,j)
-                        grid%qntemp(i, 3, j) = grid %i_wif_mar(i,k,j)
-                        grid%qntemp(i, 4, j) = grid %i_wif_apr(i,k,j)
-                        grid%qntemp(i, 5, j) = grid %i_wif_may(i,k,j)
-                        grid%qntemp(i, 6, j) = grid %i_wif_jun(i,k,j)
-                        grid%qntemp(i, 7, j) = grid %i_wif_jul(i,k,j)
-                        grid%qntemp(i, 8, j) = grid %i_wif_aug(i,k,j)
-                        grid%qntemp(i, 9, j) = grid %i_wif_sep(i,k,j)
-                        grid%qntemp(i,10, j) = grid %i_wif_oct(i,k,j)
-                        grid%qntemp(i,11, j) = grid %i_wif_nov(i,k,j)
-                        grid%qntemp(i,12, j) = grid %i_wif_dec(i,k,j)
-                     END DO
-                  END DO
-                  IF ( k .EQ. 1 ) THEN
-                     WRITE(a_message,*) ' QNIFA (jan and feb) ', grid%qntemp(its,1,jts),grid%qntemp(its,2,jts)
-                     CALL wrf_debug ( 1 , a_message)
-                  END IF
-                  CALL monthly_interp_to_date ( grid%qntemp , current_date , grid%qntemp2 , &
-                                                ids , ide , jds , jde , kds , kde , &
-                                                ims , ime , jms , jme , kms , kme , &
-                                                its , ite , jts , jte , kts , kte )
-                  IF ( k .eq. 1 ) THEN
-                     write(a_message,*) ' QNIFA (now) ', grid%qntemp2(its,jts)
-                     CALL wrf_debug ( 1 , a_message)
-                  END IF
-                  IF      (       wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %i_wif_now(i,config_flags%num_wif_levels+1-k,j) = grid%qntemp2(i,j)
-                        END DO
-                     END DO
-                  ELSE IF ( .NOT. wif_upside_down ) THEN
-                     DO j = jts, MIN(jte,jde-1)
-                        DO i = its, MIN(ite,ide-1)
-                           grid %i_wif_now(i,                              k,j) = grid%qntemp2(i,j)
-                        END DO
-                     END DO
-                  END IF
-               END DO
+                    ! Ice-friendly aerosol
+                  do_qnifa: if (flag_qnifa .EQ. 1) then
+                     if (flag_p_wif .EQ. 1) then
+                        CALL wrf_debug (0 , 'Vertically-interpolating QNIFA first guess from WPS data to fill scalar using native pressure field')
+                        CALL wrf_debug (0 , 'COMMENT: BE SURE num_wif_levels IN NAMELIST EQUALS num_wif_levels IN MET_EM FILES!')
+                        CALL vert_interp ( grid%qnifa_gc , grid%p_wif_gc , scalar(:,:,:,P_QNIFA) , grid%pb , &
+                                           grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                           grid%pmaxwnn , grid%ptropnn , &
+                                           0 , 0 , &
+                                           config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                           config_flags%maxw_above_this_level , &
+                                           config_flags%num_wif_levels , 'Q' , &
+                                           interp_type , linear_interp , extrap_type , &
+                                           .false. , use_levels_below_ground , use_surface , &
+                                           zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                           ids , ide , jds , jde , kds , kde , &
+                                           ims , ime , jms , jme , kms , kme , &
+                                           its , ite , jts , jte , kts , kte )
+                     else  ! Interpolate according to metgrid pressure field
+                        if (config_flags%num_wif_levels .EQ. num_metgrid_levels) then  ! Check to make sure that the number of aerosol levels is consistent with the metgrid pressure levels
+                           CALL wrf_debug (0 , 'Vertically-interpolating QNIFA first guess from WPS data to fill scalar using metgrid pressure field')
+                           CALL vert_interp ( grid%qnifa_gc , grid%pd_gc , scalar(:,:,:,P_QNIFA) , grid%pb , &
+                                              grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                              grid%pmaxwnn , grid%ptropnn , &
+                                              0 , 0 , &
+                                              config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                              config_flags%maxw_above_this_level , &
+                                              config_flags%num_wif_levels , 'Q' , &
+                                              interp_type , linear_interp , extrap_type , &
+                                              .false. , use_levels_below_ground , use_surface , &
+                                              zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                              ids , ide , jds , jde , kds , kde , &
+                                              ims , ime , jms , jme , kms , kme , &
+                                              its , ite , jts , jte , kts , kte )
+                        else
+                           CALL wrf_error_fatal ('num_qnifa_levels not equal to num_metgrid_levels')
+                        end if
+                     end if
+                  else
+                     CALL wrf_error_fatal ('mp_physics=28 but there is not QNIFA aerosol information from first guess' )
+                  end if do_qnifa
 
-               CALL vert_interp ( grid %i_wif_now , grid%p_wif_now , scalar(:,:,:,P_qnifa) , grid%pb , &
-                                  grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
-                                  grid%pmaxwnn , grid%ptropnn , &
-                                  0 , 0 , &
-                                  config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
-                                  config_flags%maxw_above_this_level , &
-                                  config_flags%num_wif_levels , 'Q' , &
-                                  interp_type , linear_interp , extrap_type , &
-                                  .false. , use_levels_below_ground , use_surface , &
-                                  zap_close_levels , force_sfc_in_vinterp , grid%id , &
-                                  ids , ide , jds , jde , kds , kde , &
-                                  ims , ime , jms , jme , kms , kme , &
-                                  its , ite , jts , jte , kts , kte )
+                    ! Black carbon aerosol
+                  if (config_flags%wif_input_opt .EQ. 2) then
+                     do_qnbca: if (flag_qnbca .EQ. 1) then
+                        if (flag_p_wif .EQ. 1) then
+                           CALL wrf_debug (0 , 'Vertically-interpolating QNBCA first guess from WPS data to fill scalar using native pressure field')
+                           CALL wrf_debug (0 , 'COMMENT: BE SURE num_wif_levels IN NAMELIST EQUALS num_wif_levels IN MET_EM FILES!')
+                           CALL vert_interp ( grid%qnbca_gc , grid%p_wif_gc , scalar(:,:,:,P_QNBCA) , grid%pb , &
+                                              grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                              grid%pmaxwnn , grid%ptropnn , &
+                                              0 , 0 , &
+                                              config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                              config_flags%maxw_above_this_level , &
+                                              config_flags%num_wif_levels , 'Q' , &
+                                              interp_type , linear_interp , extrap_type , &
+                                              .false. , use_levels_below_ground , use_surface , &
+                                              zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                              ids , ide , jds , jde , kds , kde , &
+                                              ims , ime , jms , jme , kms , kme , &
+                                              its , ite , jts , jte , kts , kte )
+                        else  ! Interpolate according to metgrid pressure field
+                           if (config_flags%num_wif_levels .EQ. num_metgrid_levels) then  ! Check to make sure that the number of aerosol levels is consistent with the metgrid pressure levels
+                              CALL wrf_debug (0 , 'Vertically-interpolating QNBCA first guess from WPS data to fill scalar using metgrid pressure field')
+                              CALL vert_interp ( grid%qnbca_gc , grid%pd_gc , scalar(:,:,:,P_QNBCA) , grid%pb , &
+                                                 grid%hgtmaxw , grid%hgttrop , grid%pmaxw , grid%ptrop , &
+                                                 grid%pmaxwnn , grid%ptropnn , &
+                                                 0 , 0 , &
+                                                 config_flags%maxw_horiz_pres_diff , config_flags%trop_horiz_pres_diff , &
+                                                 config_flags%maxw_above_this_level , &
+                                                 config_flags%num_wif_levels , 'Q' , &
+                                                 interp_type , linear_interp , extrap_type , &
+                                                 .false. , use_levels_below_ground , use_surface , &
+                                                 zap_close_levels , force_sfc_in_vinterp , grid%id , &
+                                                 ids , ide , jds , jde , kds , kde , &
+                                                 ims , ime , jms , jme , kms , kme , &
+                                                 its , ite , jts , jte , kts , kte )
+                           else
+                              CALL wrf_error_fatal ('num_qnifa_levels not equal to num_metgrid_levels')
+                           end if
+                        end if
+                     else
+                        CALL wrf_error_fatal ('mp_physics=28 and wif_input_opt=2 but there is not QNBCA aerosol information from first guess' )
+                     end if do_qnbca
+                  end if
 
-            ELSE IF ( ( config_flags%mp_physics .EQ. THOMPSONAERO  ) .AND. &
-                      ( ( config_flags%wif_input_opt .EQ. USE_WIF_INPUT ) .OR.  &
-                        ( config_flags%use_aero_icbc                    ) ) .AND. &
-                      ( ( flag_qnwfa .NE. 1 ) .OR.  &
-                        ( flag_qnifa .NE. 1 ) ) ) THEN
-               WRITE (a_message,*) "--- ERROR: QNWFA or QNIFA fields are not in the metgrid input, they can't be interpolated"
-               CALL wrf_message ( a_message)
-               WRITE (a_message,*) '--- ERROR: See https://www2.mmm.ucar.edu/wrf/users/wrfv3.9/mp28_updated.html'
-               CALL wrf_message ( a_message)
-               WRITE (a_message,*) '--- ERROR: Neither wif_input_opt=1 nor use_aero_icbc=T are allowed without aerosol data'
-               CALL wrf_error_fatal ( a_message)
+               case default
 
-            END IF
-            END IF
-         END IF
+                  CALL wrf_debug (0 , 'aer_init_opt = ', aer_init_opt)
+                  CALL wrf_error_fatal ('Aerosol forcing option does not exist for mp_physics=28' )
+
+               end select select_aer_init_opt_3d
+
+            ELSE IF (config_flags%mp_physics .EQ. THOMPSONAERO .and. &
+                     config_flags%wif_input_opt .EQ. 0 ) THEN
+               CALL wrf_error_fatal ('wif_input_opt=0 but mp_physics=28' )
+            END IF if_thompsonaero_3d
 
 !=========================================================================================
 !    END OF OPTIONAL 3D DATA, USUALLY AEROSOLS
@@ -2980,12 +3135,23 @@ integer::oops1,oops2
 
       !  Split NUDAPT  Urban Parameters
 
-      IF ( ( config_flags%sf_urban_physics == 1 ) .OR. ( config_flags%sf_urban_physics == 2 ) .OR. ( config_flags%sf_urban_physics == 3 ) ) THEN
+      distributed_aerodynamics_if: IF (config_flags%sf_urban_physics == 1 .AND. config_flags%slucm_distributed_drag) THEN
+         CALL nl_get_isurban ( grid%id , grid%isurban )
+         DO j = jts , MIN(jde-1,jte)
+            DO i = its , MIN(ide-1,ite)
+              IF (grid%landusef(i, grid%isurban, j) > 0) THEN
+                grid%frc_urb2d(i, j) = MAX(0.1, MIN(0.9, 1 - grid%shdavg(i, j) / 100.))
+              END IF
+            END DO
+          END DO
+      ELSE
+
+       IF ( ( config_flags%sf_urban_physics == 1 ) .OR. ( config_flags%sf_urban_physics == 2 ) .OR. ( config_flags%sf_urban_physics == 3 ) ) THEN
          DO j = jts , MIN(jde-1,jte)
             DO i = its , MIN(ide-1,ite)
               IF ( MMINLU == 'NLCD40' .OR. MMINLU == 'MODIFIED_IGBP_MODIS_NOAH') THEN
                   IF ( grid%FRC_URB2D(i,j) .GE. 0.5 .AND.  &
-                      (grid%ivgtyp(i,j).NE.13 .AND. grid%ivgtyp(i,j).NE.24 .AND. grid%ivgtyp(i,j).NE.25 .AND. grid%ivgtyp(i,j).NE.26)) grid%ivgtyp(i,j)=13
+                      (grid%ivgtyp(i,j).NE.13 .AND. grid%ivgtyp(i,j).NE.24 .AND. grid%ivgtyp(i,j).NE.25 .AND. grid%ivgtyp(i,j).NE.26 .AND. grid%ivgtyp(i,j).LT.30)) grid%ivgtyp(i,j)=13
               ELSE IF ( MMINLU == "USGS" ) THEN
                   IF ( grid%FRC_URB2D(i,j) .GE. 0.5 .AND.  &
                        grid%ivgtyp(i,j).NE.1 ) grid%ivgtyp(i,j)=1
@@ -3002,7 +3168,7 @@ integer::oops1,oops2
                grid%HGT_URB2D(i,j)  = grid%URB_PARAM(i,94,j)
             END DO
          END DO
-      ENDIF
+       ENDIF
 
       IF ( ( config_flags%sf_urban_physics == 2 ) .OR. ( config_flags%sf_urban_physics == 3 ) ) THEN
          DO j = jts , MIN(jde-1,jte)
@@ -3035,6 +3201,8 @@ integer::oops1,oops2
             END DO
          END DO
       END DO
+
+      END IF distributed_aerodynamics_if
 
       END IF
 
@@ -3081,7 +3249,7 @@ integer::oops1,oops2
 
       fix_tsk_tmn : SELECT CASE ( model_config_rec%sf_surface_physics(grid%id) )
 
-         CASE ( SLABSCHEME , LSMSCHEME , NOAHMPSCHEME , RUCLSMSCHEME, PXLSMSCHEME,CLMSCHEME, SSIBSCHEME )
+         CASE ( SLABSCHEME , LSMSCHEME , NOAHMPSCHEME , RUCLSMSCHEME, PXLSMSCHEME,CLMSCHEME, CTSMSCHEME, SSIBSCHEME )
             DO j = jts, MIN(jde-1,jte)
                DO i = its, MIN(ide-1,ite)
                   IF ( skip_middle_points_t ( ids , ide , jds , jde , i , j , em_width , hold_ups ) ) CYCLE
@@ -3359,6 +3527,7 @@ integer::oops1,oops2
                           ( model_config_rec%sf_surface_physics(grid%id) .NE. RUCLSMSCHEME ).AND. &
                           ( model_config_rec%sf_surface_physics(grid%id) .NE. SSIBSCHEME ).AND. & !fds
                           ( model_config_rec%sf_surface_physics(grid%id) .NE. CLMSCHEME ).AND. &
+                          ( model_config_rec%sf_surface_physics(grid%id) .NE. CTSMSCHEME ).AND. &
                           ( model_config_rec%sf_surface_physics(grid%id) .NE. PXLSMSCHEME ) ) THEN
                         print *,'error in the grid%tslb'
                         print *,'i,j=',i,j
@@ -3380,7 +3549,7 @@ integer::oops1,oops2
                                  grid%tslb(i,ns,j) = ( grid%tsk(i,j)*(3.0 - grid%zs(ns)) + &
                                                        grid%tmn(i,j)*(0.0 - grid%zs(ns)) ) /(3.0 - 0.0)
                               END DO
-                           CASE ( LSMSCHEME , NOAHMPSCHEME , RUCLSMSCHEME, PXLSMSCHEME,CLMSCHEME,SSIBSCHEME )
+                           CASE ( LSMSCHEME , NOAHMPSCHEME , RUCLSMSCHEME, PXLSMSCHEME,CLMSCHEME, CTSMSCHEME, SSIBSCHEME )
 !                             CALL wrf_error_fatal ( 'Assigned constant soil moisture to 0.3, stopping')
                               DO ns = 1 , model_config_rec%num_soil_layers
                                  grid%tslb(i,ns,j) = ( grid%tsk(i,j)*(3.0 - grid%zs(ns)) + &
@@ -3932,6 +4101,7 @@ endif
                         ims , ime , jms , jme , kms , kme , &
                         its , ite , jts , jte , kts , kte )
 
+      IF      ( .not.config_flags%use_sh_qv ) THEN
       IF      ( config_flags%rh2qv_method .eq. 1 ) THEN
          CALL rh_to_mxrat1(grid%u_1, grid%v_1, grid%p_hyd , moist(:,:,:,P_QV) ,       &
                            config_flags%rh2qv_wrt_liquid ,                        &
@@ -3953,13 +4123,13 @@ endif
                            ims , ime , jms , jme , kms , kme ,                    &
                            its , ite , jts , jte , kts , kte-1 )
       END IF
+      END IF
      
       !  Compute pressure similarly to how computed within model, with final Qv.
 
       !  Do a re-balance or not?  0 = NOPE
-
-      IF ( ( config_flags%rebalance .EQ. 0 ) .OR. &
-           ( ( config_flags%rebalance .EQ. 2 ) .AND.  ( config_flags%vert_refine_method .NE. 2 ) ) ) THEN
+      !  Note that rebalance must be 1 for vertical nesting
+      IF ( config_flags%rebalance .EQ. 0 ) THEN
 
           DO j = jts, min(jde-1,jte)
              DO k=kts,kte-1
@@ -4251,44 +4421,6 @@ endif
           END DO
       END IF
 
-      !  Template for initializing trajectories.  The i, j, and k starting locations
-      !  are specified.  Right now, a small plane in the middle of the domain is
-      !  selected.
-      
-      grid%traj_i    = -9999
-      grid%traj_j    = -9999
-      grid%traj_k    = -9999
-      grid%traj_lat  = -9999
-      grid%traj_long = -9999
-    
-      IF (config_flags%num_traj .gt. 0 .and. config_flags%traj_opt .gt. 0) THEN
-         icount = 1
-         DO j = (jde + jds)/2 - 2, (jde + jds)/2 + 2, 1
-            DO i = (ide + ids)/2 - 2, (ide + ids)/2 + 2, 1
-               IF ( its .LE. i    .and. ite .GE. i   .and.  jts .LE. j    .and. jte .GE. j ) THEN
-                  grid%traj_i   (icount) = i
-                  grid%traj_j   (icount) = j
-                  grid%traj_k   (icount) = 10
-                  grid%traj_lat (icount) = grid%xlat(i,j)
-                  grid%traj_long(icount) = grid%xlong(i,j)
-               END IF
-         
-#ifdef DM_PARALLEL
-               grid%traj_i   (icount) = wrf_dm_max_real ( grid%traj_i   (icount) )
-               grid%traj_j   (icount) = wrf_dm_max_real ( grid%traj_j   (icount) )
-               grid%traj_k   (icount) = wrf_dm_max_real ( grid%traj_k   (icount) )
-               grid%traj_lat (icount) = wrf_dm_max_real ( grid%traj_lat (icount) )
-               grid%traj_long(icount) = wrf_dm_max_real ( grid%traj_long(icount) )
-#endif
-                
-               icount = icount + 1
-               IF (icount .GT. config_flags%num_traj) THEN
-                  EXIT
-               END IF
-            END DO
-         END DO  
-      END IF
-
       !  Simple initialization for 3d ocean.  
 
       IF ( config_flags%sf_ocean_physics .EQ. PWP3DSCHEME ) THEN
@@ -4352,22 +4484,293 @@ endif
 !.. emission inventory would be better, but, for now, scale like this:
 !.. where: Nwfa=50 per cc, emit 0.875E4 aerosols per second per grid box unit
 !..        that was tested as ~(20kmx20kmx50m = 2.E10 m**-3)
+!..
+!..Add option for aerosol emissions from first guess source (e.g., GEOS-5)
+!.. Can process aerosol from anthropogenic as well as biomass burning sources
+!.. The flag_qn***2d variables in the met_em files must be set to 1
+!.. for anthropogenic aerosol emissions to activate
+!.. The flag_qn**bba2d variables in the met_em files must be set to 1
+!.. to read biomass burning aerosol emissions
 !+---+-----------------------------------------------------------------+
 
-      IF ( config_flags%use_aero_icbc .AND. ( flag_qnwfa .EQ. 1 ) .AND. &
-                  ( config_flags%mp_physics .EQ. THOMPSONAERO ) ) THEN
-         do j = jts, min(jde-1,jte)
-         do i = its, min(ide-1,ite)
-            z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
-            airmass = 1./grid%alt(i,1,j) * z1 * config_flags%dx*config_flags%dy          ! kg
-            grid%qnwfa2d(i,j) = grid%QNWFA_now(i,1,j) * 0.000196 * (airmass*2.E-10)
-     if(i.eq.its .and. j.eq.jts) then
-      write(a_message,*) 'aero_sfc_flux: ', i,j,z1,1./grid%alt(i,1,j),airmass,grid%QNWFA_now(i,1,j),grid%qnwfa2d(i,j)
-      CALL wrf_debug (1, a_message)
-     endif
+      if_thompsonaero_2d: IF (config_flags%mp_physics .EQ. THOMPSONAERO .AND. &
+                config_flags%wif_input_opt .GT. 0) THEN
+
+      select_aer_init_opt_2d: select case (aer_init_opt)
+
+               case (0)  ! Initialize to zero
+
+                  CALL wrf_debug (0 , 'COMMENT: Surface emissions of QNWFA will be computed in microphysics')
+                  CALL wrf_debug (0 , 'COMMENT: Surface emissions of QNIFA will be initialized to zero values')
+                  do j = jts, MIN(jde-1,jte)
+                  do i = its, MIN(ide-1,ite)
+                     grid%qnwfa2d(i,j) = 0.0
+                     grid%qnifa2d(i,j) = 0.0
+                  enddo
+                  enddo
+
+               case (1)  ! Monthly climatology (GOCART, etc.)
+
+                     ! Water-friendly aerosol
+                  CALL wrf_debug (0 , 'Calculating anthropogenic surface emissions of QNWFA using climatology')
+                  do j = jts, min(jde-1,jte)
+                  do i = its, min(ide-1,ite)
+                     z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                     grid%qnwfa2d(i,j) = grid%w_wif_now(i,1,j) * 0.000196 * (50./z1)
+                  enddo
+                  enddo
+
+                     ! Ice-friendly aerosol
+                  CALL wrf_debug (0 , 'Setting surface emissions of QNIFA to zero')
+                  do j = jts, min(jde-1,jte)
+                  do i = its, min(ide-1,ite)
+                     grid%qnifa2d(i,j) = 0.0
+                  enddo
+                  enddo
+
+                    ! Black carbon aerosol
+                  if (config_flags%wif_input_opt .EQ. 2) then
+                     CALL wrf_debug (0 , 'Calculating anthropogenic surface emissions of QNBCA using climatology')
+                     do j = jts, min(jde-1,jte)
+                     do i = its, min(ide-1,ite)
+                        z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                        grid%qnbca2d(i,j) = grid%b_wif_now(i,1,j) * 0.000098 * (50./z1) * (1. + grid%frc_urb2d(i,j))
+                     enddo
+                     enddo
+                  end if
+
+               case (2)  ! First guess aerosol (GEOS-5, etc.)
+
+                     ! Water-friendly aerosol
+                  if (flag_qnwfa2d .EQ. 1) then
+                     CALL wrf_debug (0 , 'Calculating anthropogenic surface emissions of QNWFA using first guess')
+                     do j = jts, min(jde-1,jte)
+                     do i = its, min(ide-1,ite)
+                        z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                        grid%qnwfa2d(i,j) = grid%qnwfa2d(i,j) * grid%alt(i,1,j) / z1
+                     enddo
+                     enddo
+                  else
+                     CALL wrf_debug (0 , 'Using first guess aerosol option, but no anthropogenic surface emissions of QNWFA found')
+                     CALL wrf_debug (0 , 'Setting anthropogenic surface emissions of QNWFA to zero')
+                     do j = jts, min(jde-1,jte)
+                     do i = its, min(ide-1,ite)
+                        grid%qnwfa2d(i,j) = 0.0
+                     enddo
+                     enddo
+                  end if
+
+                     ! Ice-friendly aerosol
+                  if (flag_qnifa2d .EQ. 1) then
+                     CALL wrf_debug (0 , 'Calculating surface emissions of QNIFA using first guess')
+                     do j = jts, min(jde-1,jte)
+                     do i = its, min(ide-1,ite)
+                        z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                        grid%qnifa2d(i,j) = grid%qnifa2d(i,j) * grid%alt(i,1,j) / z1
+                     enddo
+                     enddo
+                  else
+                     CALL wrf_debug (0 , 'Using first guess aerosol option, but no surface emissions of QNIFA found')
+                     CALL wrf_debug (0 , 'Setting surface emissions of QNIFA to zero')
+                     do j = jts, min(jde-1,jte)
+                     do i = its, min(ide-1,ite)
+                        grid%qnifa2d(i,j) = 0.0
+                     enddo
+                     enddo
+                  end if
+
+                    ! Black carbon aerosol
+                  if (config_flags%wif_input_opt .EQ. 2) then
+                     if (flag_qnbca2d .EQ. 1) then
+                        CALL wrf_debug (0 , 'Calculating surface emissions of QNBCA using first guess')
+                        do j = jts, min(jde-1,jte)
+                        do i = its, min(ide-1,ite)
+                           z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                           grid%qnbca2d(i,j) = grid%qnbca2d(i,j) * grid%alt(i,1,j) / z1
+                        enddo
+                        enddo
+                     else
+                        CALL wrf_debug (0 , 'Using first guess aerosol option, but no surface emissions of QNBCA found')
+                        CALL wrf_debug (0 , 'Setting surface emissions of QNBCA to zero')
+                        do j = jts, min(jde-1,jte)
+                        do i = its, min(ide-1,ite)
+                           grid%qnbca2d(i,j) = 0.0
+                        enddo
+                        enddo
+                     end if
+                  end if
+
+                    ! Biomass burning aerosol
+                  if (config_flags%aer_fire_emit_opt .GT. 0) then
+                       ! Organic carbon first
+                     if (flag_qnocbb2d .EQ. 1) then
+                        CALL wrf_debug (0 , 'Calculating biomass burning surface emissions of organic carbon aerosol using first guess')
+                        do j = jts, min(jde-1,jte)
+                        do i = its, min(ide-1,ite)
+                           z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                           grid%qnocbb2d(i,j) = grid%qnocbb2d(i,j) * grid%alt(i,1,j) / z1
+                        enddo
+                        enddo
+                     else
+                        CALL wrf_debug (0 , 'Using first guess aerosol option, but no biomass burning surface emissions of organic carbon aerosol found')
+                        CALL wrf_debug (0 , 'Setting biomass burning surface emissions of organic carbon aerosol to zero')
+                        do j = jts, min(jde-1,jte)
+                        do i = its, min(ide-1,ite)
+                           grid%qnocbb2d(i,j) = 0.0
+                        enddo
+                        enddo
+                     end if
+
+                       ! Black carbon second
+                     if (config_flags%aer_fire_emit_opt .EQ. 2) then
+                        if (flag_qnbcbb2d .EQ. 1) then
+                           CALL wrf_debug (0 , 'Calculating biomass burning surface emissions of black carbon aerosol using first guess')
+                           do j = jts, min(jde-1,jte)
+                           do i = its, min(ide-1,ite)
+                              z1 = (grid%phb(i,2,j)-grid%phb(i,1,j))/g
+                              grid%qnbcbb2d(i,j) = grid%qnbcbb2d(i,j) * grid%alt(i,1,j) / z1
+                           enddo
+                           enddo
+                        else
+                           CALL wrf_debug (0 , 'Using first guess aerosol option, but no biomass burning surface emissions of black carbon aerosol found')
+                           CALL wrf_debug (0 , 'Setting biomass burning surface emissions of black carbon aerosol to zero')
+                           do j = jts, min(jde-1,jte)
+                           do i = its, min(ide-1,ite)
+                              grid%qnbcbb2d(i,j) = 0.0
+                           enddo
+                           enddo
+                        end if
+                     end if
+                  else
+                     CALL wrf_debug (0 , 'Skipping biomass burning surface emissions')
+                  end if
+
+               case default
+
+                  CALL wrf_debug (0 , 'aer_init_opt = ', aer_init_opt)
+                  CALL wrf_error_fatal ('Aerosol forcing option does not exist for mp_physics=28' )
+
+               end select select_aer_init_opt_2d
+
+      ENDIF if_thompsonaero_2d
+
+!+---+-----------------------------------------------------------------+
+!..We can consider that in circumstance of a 'cold start' we can make
+!.. an attempt to insert some initial clouds to get a better starting
+!.. radiation representation due to clouds using the icloud3 cloud fraction
+!.. scheme.
+!+---+-----------------------------------------------------------------+
+
+      if (config_flags%insert_init_cloud .AND.                          &
+                    (P_QC .gt. PARAM_FIRST_SCALAR .AND.                 &
+                     P_QI .gt. PARAM_FIRST_SCALAR)) then
+
+         ALLOCATE(temp_P(kts:kte-1))
+         ALLOCATE(temp_Dz(kts:kte-1))
+         ALLOCATE(temp_T(kts:kte-1))
+         ALLOCATE(temp_R(kts:kte-1))
+         ALLOCATE(temp_Qv(kts:kte-1))
+         ALLOCATE(temp_Qc(kts:kte-1))
+         ALLOCATE(temp_Nc(kts:kte-1))
+         ALLOCATE(temp_Qi(kts:kte-1))
+         ALLOCATE(temp_Ni(kts:kte-1))
+         ALLOCATE(temp_Qs(kts:kte-1))
+         ALLOCATE(temp_CF(kts:kte-1))
+
+         i_end = MIN(ite,ide-1)
+         j_end = MIN(jte,jde-1)
+         max_relh = 1.5
+#if ( defined( DM_PARALLEL ) && ( ! defined( STUBMPI ) ) )
+         max_relh = wrf_dm_max_real ( MAXVAL(grid%u_1(its:i_end,:,jts:j_end)) ) 
+#else
+         max_relh = MAXVAL ( grid%u_1(its:i_end,:,jts:j_end) )
+#endif
+         max_relh = max_relh*0.01
+
+         gridkm = SQRT(config_flags%dx*config_flags%dy)*0.001
+
+         !..As it occurs up above, temporarily utilizing the v_1 variable,
+         !.. to hold temperature, which it does when time_loop=0.
+
+         IF ( internal_time_loop .GT. 1 ) THEN
+            grid%v_1 = grid%t_2+t0
+            CALL theta_to_t ( grid%v_1 , grid%p_hyd  , p00 , &
+                              ids , ide , jds , jde , kds , kde , &
+                              ims , ime , jms , jme , kms , kme , &
+                              its , ite , jts , jte , kts , kte )
+         ENDIF
+
+         do j = jts, j_end
+         do i = its, i_end
+            IF ( skip_middle_points_t ( ids , ide , jds , jde , i , j , em_width , hold_ups ) ) CYCLE
+            debug_flag = .false.
+!           if (i.eq.9 .and. j.eq.9) debug_flag = .true.
+
+            temp_xland = grid%xland(i,j)
+            if (grid%lakemask(i,j) .eq. 1) temp_xland = 1
+            do k = kts, kte-1
+               temp_Dz(k) = (grid%ph_2(i,k+1,j)+grid%phb(i,k+1,j) - (grid%ph_2(i,k,j)+grid%phb(i,k,j)))/g
+               temp_P(k) = grid%p_hyd(i,k,j)
+               temp_T(k) = grid%v_1(i,k,j)         ! Around line num 1800 v_1 used to hold temperature.
+               temp_R(k) = 1./grid%alt(i,k,j)
+               temp_Qv(k) = moist(i,k,j,P_QV)
+               temp_Qc(k) = MAX(0., moist(i,k,j,P_QC))
+               temp_Qi(k) = MAX(0., moist(i,k,j,P_QI))
+               if (P_QS .gt. 1) then
+                  temp_Qs(k) = MAX(0., moist(i,k,j,P_QS))
+               else
+                  temp_Qs(k) = 0.
+               endif
+               if (P_QNI .gt. 1) then
+                  temp_Ni(k) = MAX(0., scalar(i,k,j,P_QNI))
+               else
+                  temp_Ni(k) = 0.
+               endif
+               if (P_QNC .gt. 1) then
+                  temp_Nc(k) = MAX(0., scalar(i,k,j,P_QNC))
+               else
+                  temp_Nc(k) = 0.
+               endif
+               temp_CF(k) = 0.
+            enddo
+
+            call cal_cldfra3(temp_CF,temp_Qv,temp_Qc,temp_Qi,temp_Qs,   &
+     &                temp_Dz, temp_P, temp_T, temp_xland, gridkm,      &
+     &                config_flags%insert_init_cloud, max_relh,         &
+     &                kts, kte-1, debug_flag)
+
+            do k = kts, kte-1
+               grid%cldfra(i,k,j) = temp_CF(k)
+            enddo
+
+            if (debug_flag) then
+            do k = kts, kte-1
+              write(*,*) ' DEBUG_column: ', temp_P(k), temp_T(k), temp_Qv(k), temp_Qc(k), temp_Qi(k), moist(i,k,j,P_QC), moist(i,k,j,P_QI)
+            enddo
+            endif
+
+            do k = kts, kte-1
+               moist(i,k,j,P_QV) = MAX(temp_Qv(k), moist(i,k,j,P_QV)) 
+               moist(i,k,j,P_QC) = temp_Qc(k)
+               moist(i,k,j,P_QI) = temp_Qi(k)
+            enddo
+
          enddo
          enddo
-      ENDIF
+
+         DEALLOCATE(temp_P)
+         DEALLOCATE(temp_Dz)
+         DEALLOCATE(temp_T)
+         DEALLOCATE(temp_R)
+         DEALLOCATE(temp_Qv)
+         DEALLOCATE(temp_Qc)
+         DEALLOCATE(temp_Nc)
+         DEALLOCATE(temp_Qi)
+         DEALLOCATE(temp_Ni)
+         DEALLOCATE(temp_Qs)
+         DEALLOCATE(temp_CF)
+
+      endif
 
 !+---+-----------------------------------------------------------------+
 !..Let us ensure that double-moment microphysics variables have numbers
@@ -4435,6 +4838,22 @@ endif
          enddo
 
       ENDIF
+
+      if (config_flags%madwrf_cldinit == 1)  &
+          call Init_madwrf_clouds (moist, p_qv, p_qc, p_qi, p_qs, p00, grid%t_2, grid%p_hyd, grid%ph_2, grid%phb,      &
+            grid%alt, grid%xland, grid%cldmask, grid%cldtopz, grid%cldbasez, grid%brtemp, grid%ht, grid%dx, grid%dy,   &
+            flag_cldmask, flag_cldtopz, flag_cldbasez, flag_brtemp, em_width, hold_ups, ids, ide, jds, jde, its, ims,  &
+            ime, jms, jme, kms, kme, ite, jts, jte, kts, kte, grid%cldfra)
+
+        ! MAD-WRF tracers initialization
+      if (config_flags%madwrf_opt == 2) then
+        if (f_qc .and. f_qi .and. f_qs) then
+          call Init_madwrf_tracers (tracer, moist, p_qc, p_qi, p_qs, p_tr_qc, p_tr_qi, p_tr_qs, &
+              ids, ide, jds, jde, kds, kde, ims, ime, jms, jme, kms, kme, its, ite, jts, jte, kts, kte)
+        else
+          call wrf_error_fatal('madwrf_opt=2 requires a mp_physics option with qc, qi and qs')
+        end if
+      end if
 
 !+---+-----------------------------------------------------------------+
       !  Added by Greg Thompson.  Pre-set snow depth by latitude, elevation, and day-of-year.
@@ -4930,6 +5349,8 @@ endif
 
 #ifdef VERT_UNIT
 
+!gfortran -DVERT_UNIT -ffree-form -ffree-line-length-none module_initialize_real.F -o vert.exe
+
 !This is a main program for a small unit test for the vertical interpolation.
 
 program vint
@@ -4961,6 +5382,7 @@ program vint
    logical, parameter :: use_surface             = .TRUE. ! .FALSE. ! .TRUE.
    real   , parameter :: zap_close_levels        = 500. ! 100.
    integer, parameter :: force_sfc_in_vinterp    = 6 ! 0 ! 6
+   integer, parameter :: id                      = 1
 
    integer :: k
 
@@ -4975,7 +5397,7 @@ program vint
    print *,'UNIT TEST FOR VERTICAL INTERPOLATION'
    print *,'------------------------------------'
    print *,' '
-   do lagrange_order = 1 , 9 , 8
+   do lagrange_order = 1 , 1
       print *,' '
       print *,'------------------------------------'
       print *,'Lagrange Order = ',lagrange_order
@@ -5006,7 +5428,7 @@ program vint
                          generic , 'T' , &
                          interp_type , lagrange_order , extrap_type , &
                          lowest_lev_from_sfc , use_levels_below_ground , use_surface , &
-                         zap_close_levels , force_sfc_in_vinterp , &
+                         zap_close_levels , force_sfc_in_vinterp , id , &
                          ids , ide , jds , jde , kds , kde , &
                          ims , ime , jms , jme , kms , kme , &
                          its , ite , jts , jte , kts , kte )
@@ -5052,8 +5474,6 @@ subroutine fillitup ( fo , po , fn , pn , &
 
    integer :: i , j , k
 
-   real , parameter :: piov2 = 3.14159265358 / 2.
-
    k = 1
    do j = jts , jte
    do i = its , ite
@@ -5065,6 +5485,7 @@ subroutine fillitup ( fo , po , fn , pn , &
    do j = jts , jte
    do i = its , ite
       po(i,k,j) = ( 5000. * ( 1 - (k-1) ) + 100000. * ( (k-1) - (generic-1) ) ) / (1. - real(generic-1) )
+!     po(i,k,j) = FILL IN YOUR INPUT PRESSURE LEVELS
    end do
    end do
    end do
@@ -5074,7 +5495,7 @@ subroutine fillitup ( fo , po , fn , pn , &
       do j = jts , jte
       do i = its , ite
          fo(i,k,j) = po(i,k,j)
-!        fo(i,k,j) = sin(po(i,k,j) * piov2 / 102000. )
+!        fo(i,k,j) = FILL IN YOUR COLUMN OF PRESS_LEVEL FIELD
       end do
       end do
       end do
@@ -5083,7 +5504,6 @@ subroutine fillitup ( fo , po , fn , pn , &
       do j = jts , jte
       do i = its , ite
          fo(i,k,j) = (((po(i,k,j)-5000.)/102000.)*((102000.-po(i,k,j))/102000.))*102000.
-!        fo(i,k,j) = sin(po(i,k,j) * piov2 / 102000. )
       end do
       end do
       end do
@@ -5095,6 +5515,7 @@ subroutine fillitup ( fo , po , fn , pn , &
    do j = jts , jte
    do i = its , ite
       pn(i,k,j) = ( 5000. * ( 0 - (k-1) ) + 102000. * ( (k-1) - (kte-1) ) ) / (-1. *  real(kte-1) )
+!     pn(i,k,j) = FILL IN A COLUMN OF KNOWN FULL-LEVEL PRESSURES ON ETA SURFACES
    end do
    end do
    end do
@@ -5113,7 +5534,7 @@ subroutine fillitup ( fo , po , fn , pn , &
       do j = jts , jte
       do i = its , ite
          fn(i,k,j) = pn(i,k,j)
-!        fn(i,k,j) = sin(pn(i,k,j) * piov2 / 102000. )
+!        fn(i,k,j) = FILL IN COLUMN OF HALF LEVEL FIELD
       end do
       end do
       end do
@@ -5136,6 +5557,12 @@ function skip_middle_points_t ( ids , ide , jds , jde , i , j , em_width , hold_
    logical :: hold_ups
    skip_middle_points_t = .false.
 end function skip_middle_points_t
+
+subroutine wrf_message(level,message)
+   character(len=*), intent(in) :: message
+   integer, intent(in) :: level
+   print *,trim(message)
+end subroutine wrf_message
 
 #endif
 
@@ -7441,6 +7868,7 @@ WRITE (*,FMT='("Full level index = ",I4,"     Height = ",F7.1," m")') k,phb(1)/g
 do k = 2 ,kte
 WRITE (*,FMT='("Full level index = ",I4,"     Height = ",F7.1," m      Thickness = ",F6.1," m")') k,phb(k)/g,(phb(k)-phb(k-1))/g
 end do
+WRITE (*,FMT='("p_top = ",F7.0," Pa, dzbot = ",F6.1," m, dzstretch_s/u = ",2F6.2)') p_top,dzbot,dzstretch_s,dzstretch_u
 
       END IF
 
@@ -7555,6 +7983,27 @@ end do
       END DO
 
    END SUBROUTINE monthly_min_max
+
+!---------------------------------------------------------------------
+
+   SUBROUTINE monthly_avg ( field_in , field_avg , &
+                      ids , ide , jds , jde , kds , kde , &
+                      ims , ime , jms , jme , kms , kme , &
+                      its , ite , jts , jte , kts , kte )
+      IMPLICIT NONE
+      INTEGER , INTENT(IN)        :: ids , ide , jds , jde , kds , kde , &
+                                     ims , ime , jms , jme , kms , kme , &
+                                     its , ite , jts , jte , kts , kte
+      REAL , DIMENSION(ims:ime,12,jms:jme) , INTENT(IN)  :: field_in
+      REAL , DIMENSION(ims:ime,   jms:jme) , INTENT(OUT) :: field_avg
+      !  Local vars
+      INTEGER :: i , j
+      DO j = jts , MIN(jde-1,jte)
+        DO i = its , MIN(ide-1,ite)
+          field_avg(i, j) = SUM(field_in(i, :, j)) / 12
+        END DO
+      END DO
+   END SUBROUTINE monthly_avg
 
 !---------------------------------------------------------------------
 

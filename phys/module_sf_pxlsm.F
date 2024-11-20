@@ -129,7 +129,7 @@ CONTAINS
 !                      (Ran et al., 2016 JGR-atmosphere, Ran et al. 2017 in preparation)
 !    JP     12/2018 -  revised soil type categories (ISTI) to conform to WRF soil type input data 
 !                      soil types Sand through Clay are now 1-12 rather than 1-11
-
+!    JP     12/2021 -  Added new pathway for evaporation from the ground in the vegetated fraction of the grid cell.  
 !
 !--------------------------------------------------------------------------------------------------------------
 !--------------------------------------------------------------------------------------------------------------
@@ -269,7 +269,7 @@ CONTAINS
    INTEGER,   INTENT(IN)  ::      NSOIL, ITIMESTEP, NLCAT, NSCAT,             &
                                   ANAL_INTERVAL, PXLSM_SMOIS_INIT, PXLSM_SOIL_NUDGE
 
-   REAL,       INTENT(IN   ),OPTIONAL    ::     curr_secs
+   REAL,      INTENT(IN   ),OPTIONAL    ::     curr_secs
 
    REAL,     INTENT(IN )  ::      DT,DTBL 
 
@@ -347,7 +347,7 @@ CONTAINS
             CORE, CORB, TIME_BETWEEN_ANALYSIS,        &
             G1000, ALN10,RH2OBS, HU, SNOBS,           &
             FWSAT,FWFC,FWWLT,FB,FCGSAT,FJP,FAS,       &
-            FWRES, FC3, FCLAY, FCSAND, FFMSAND,       &   ! Soil model updates - JEP 12/14, LR 04/2017
+            FWRES, FC3, FCLAY, FCSAND, FFMSAND,       &  
             FSEAS, T2I, HC_SNOW, SNOW_FRA,SNOWALB,    &
             QST12,ZFUNC,ZF1,ZA2,QV2, DT_FDDA,         &
             FC2R,FC1SAT, DTPBL, RAW
@@ -369,6 +369,8 @@ CONTAINS
       ELSE IF (NLCAT == 20) THEN
          LAND_USE_TYPE = 'MODIS'
       ELSE IF (NLCAT == 21) THEN
+         LAND_USE_TYPE = 'MODIS'
+      ELSE IF (NLCAT == 61) THEN
          LAND_USE_TYPE = 'MODIS'
       ELSE IF (NLCAT == 24) THEN
          LAND_USE_TYPE = 'USGS'
@@ -526,26 +528,27 @@ CONTAINS
           ! are converted to ice/snow for more reasonable treatment.
           IF( (XICE(I,J).GE.0.5) .OR.   &
               (SST(I,J).LE.270.0.AND.XLAND(I,J).GE.1.50) ) THEN
-              XLAND(I,J) = 1.0
-              IFLAND = 1.0
-              ZNT(I,J) = 0.001  !  Ice
-              SMOIS(I,1,J) = 1.0     ! FWSAT
-              SMOIS(I,2,J) = 1.0     ! FWSAT
-              XICE(I,J) = 1.0
-              ALBEDO(I,J) = 0.7
-              SNOWC(I,J) = 1.0
-              SNOW_FRA = 1.0
-              VEGF_PX(I,J) = 0.0
-              LAI(I,J) = 0.0
+            XLAND(I,J)   = 1.0
+            IFLAND       = 1.0
+            ZNT(I,J)     = 0.001  
+            SMOIS(I,1,J) = 1.0 
+            SMOIS(I,2,J) = 1.0 
+            XICE(I,J)    = 1.0
+            ALBEDO(I,J)  = 0.7
+            SNOWC(I,J)   = 1.0
+            SNOW_FRA     = 1.0
+            VEGF_PX(I,J) = 0.0
+            LAI_PX(I,J)  = 0.0
+            LAI(I,J)     = 0.0
+            FCGSAT       = 3.670
           ENDIF
           !-------------------------------------------------------------
 
           !-------------------------------------------------------------
           !-- Note that when IFGROW = 0 is selected in Vegeland then max and min           
           !-- LAI and Veg are the same                                                     
-          T2I = TSLB(I,2,J)                                            
-!         FSEAS = AMAX1(1.0 - 0.0016 * (298.0 - T2I) ** 2,0.0)  ! BATS            
-          FSEAS = AMAX1(1.0 - 0.015625 * (290.0 - T2I) ** 2,0.0) ! JP97            
+          T2I = TSLB(I,2,J)                                                       
+          FSEAS = AMAX1(1.0 - 0.015625 * (290.0 - T2I) ** 2,0.0)           
           IF (T2I .GE. 290.0) FSEAS = 1.0                                          
           
           !get PX table vegetation
@@ -554,11 +557,6 @@ CONTAINS
           
 !... use MODIS LAI and VEGFRA from wrflowinp
           IF ( pxlsm_modis_veg .EQ. 1 ) THEN
-
-!               IF ( I .EQ. 300 .AND. J .EQ. 120 ) THEN
-!                    print*, "  I=",I," J=",J," LAI_PX=",LAI_PX(I,J)," VEGF_PX=",VEGF_PX(I,J), &
-!                            " LAI=",LAI(I,J)," VEGFRA=",VEGFRA(I,J)
-!               ENDIF
 
                 ! get LAI for vegetated area
                 IF ( VEGFRA(I,J) .GT. 0.0 )  THEN
@@ -658,10 +656,15 @@ CONTAINS
           
           END DO                        ! Time internal PX time loop   
 
-          TSK(I,J)    = TSLB(I,1,J)     ! Skin temp set to 1 cm soil temperature in PX for now
+          IF (IFLAND .GE. 1.5) THEN                        
+            TSK(I,J)     = SST(I,J)     ! Skin temp set to sea surface temperature for open water
+            GRDFLX(I,J)  = 0.0
+          ELSE
+            TSK(I,J)  = TSLB(I,1,J)     ! Skin temp set to 1 cm soil temperature in PX for now
+          ENDIF
           CANWAT(I,J) = WR * 1000.      ! convert WR back to mm for CANWAT
-          RAW = RA(I,J) + 4.503 / USTAR
-          QSFC(I,J) = QFX(I,J) * RAW / DENS1 + QV1
+          RAW         = RA(I,J) + 4.503 / USTAR
+          QSFC(I,J)   = QFX(I,J) * RAW / DENS1 + QV1
           
        ENDDO !  END MIAN I LOOP
       ENDDO  !  END MAIN J LOOP
@@ -975,7 +978,6 @@ CONTAINS
           FWAT = LANDUSEF(I,KWAT,J)
           !-- CHECK FOR WATER
           IF (FWAT .GE. 0.50) THEN        ! Changed WRFV3.7
-!          IF (FWAT .GE. 0.9999) THEN
             XLAI(I,J)   = LAIMX(KWAT)
             XLAIMN(I,J) = LAIMN(KWAT)
             RSTMIN(I,J) = RSMIN(KWAT)
@@ -1001,7 +1003,6 @@ CONTAINS
             XSNOALB(I,J)= SUMSNOALB
           ENDIF
 
-          !!!!!!!!!!!!!!!!!!!Qestion Limei Ran, deleted in wrf37
           IF (FWAT .GT. 0.50) THEN
             ZNT(I,J)    = Z0(KWAT)
             XALB(I,J)   = ALB(KWAT)
@@ -1182,11 +1183,12 @@ CONTAINS
       REAL        :: VAPPRS, QSBT, RH2MOD, IMF, VEGF, SOILF
       REAL        :: RSOIL, LDRY, DP       ! Soil model updates - JEP 12/14
       REAL        :: C1MAX,ZZA,ZZB,ZDEL,ZLY,ZA,ZB,ZY2
+      REAL        :: Rinc, Hcan                           ! JEP 2020
+      REAL        :: CQ3BG,CQ3VW,CQ3VG,SIGG
 
 !... Parameters
       REAL        :: ZOBS, GAMAH, BETAH, SIGF, BH, CT_SNOW, CT_IMPERV
 
-!      REAL, PARAMETER :: CV = 2.0E-5   !1.2E-5   ! K-M2/J Note: Update from 8E-6 10/14 Jon Pleim
       REAL, PARAMETER :: CV = 1.2E-5   ! K-M2/J Note: Update from 8E-6 10/14 Jon Pleim
 
       PARAMETER (ZOBS  = 1.5)    ! height for observed screen temp., (m)
@@ -1269,15 +1271,7 @@ CONTAINS
         IF (IFLAND .LT. 1.5.AND. XICE1.LT.0.5) THEN
           LDRY = 1.75*DS1*(EXP((1.-WG/WSAT)**5)-1.)/1.718       ! 1.75 cm is the layer thickness used by S&Z09
           DP  = DWAT*1.E-4 * WSAT**2 * (1.-WRES/WSAT)**(2.+3./B)
-          !DP  = DWAT*1.E-4 * 0.1 * ( 2.0*(1.-WRES/WSAT)**3 + 0.04*(1.-WRES/WSAT) )   !Deepagoda et al. 2010
           RSOIL=LDRY/DP
-
-          !Merlin et al. 2016 ECMWF H-TESSEL
-          !IF ( WG > WRES ) THEN
-          !   RSOIL = 50.0 * (WFC - WRES ) / (WG - WRES) 
-          !ELSE
-          !   RSOIL = 8000.0
-          !ENDIF
 
         ELSE
           RSOIL = 0.0
@@ -1293,12 +1287,17 @@ CONTAINS
         ENDIF
 
         !--------------------------------------------------------------------
+        ! In-canopy resistance  - Erisman et al (1994)
+        Hcan  = ZNT * 10.0
+        Rinc  = 14.0 * LAI* Hcan / UST
+
+        !--------------------------------------------------------------------
         !--  COMPUTE MOISTURE FLUX
         CALL QFLUX( DENS1,  QV1,    TA1,  SOLDN,  RAW, QSS,            &
                     VEGFRC, ISNOW,  ISTI, IFLAND, LAI, BETAP,          &
                     WG,     W2,     WR,                                &
-                    RSTMIN, WWLT, WFC, RSOIL,                          &     !  Soil model updates - JEP 12/14
-                    EG,     ER,     ETR,  CQ4,    RS,  FASS)
+                    RSTMIN, WWLT, WFC, RSOIL, RINC,                    &     
+                    EG,     ER,     ETR,  CQ4,    RS,  FASS, SIGG)
         !--------------------------------------------------------------------
 
         !--------------------------------------------------------------------
@@ -1310,7 +1309,6 @@ CONTAINS
         IF (ISNOW .LT. 0.5.AND.TG.GT.273.15)                            &                                                                               
                     LV = (2.501 - 0.00237 * (TG - 273.15)) * 1.E6  !-- FROM STULL(1988) in J/KG
         
-        ! IF (IFLAND .LT. 1.5 )  QFX = ET     !-- Recaculate QFX over land to account for P-X LSM EG, ER and ETR
         QFX = ET
         LH  = LV * QFX
         !-----------------------------------------------------------------------------------------
@@ -1342,18 +1340,17 @@ CONTAINS
           ! IMPERVIOUS weighting scheme -- Subtract highly accurate impervious fraction from cell
           ! remainder is split between ground and vegetation. CT is a weighted fractional average.
           ! Snow CT is then applied for final heat capacity
-          IMF  = AMAX1(0.0,IMPERV/100.0)
-          VEGF = (1.0 - IMF) * VEGFRC
-          SOILF= (1.0 - IMF) * (1.0 - VEGFRC)
-          CT   = 1./( IMF/CT_IMPERV + VEGF/CV + SOILF/CG)                        
-          CT   = 1./(SNOW_FRA/CT_SNOW + (1-SNOW_FRA)/CT)
-          CAPG = 1.0/CT          
-
+          IMF     = AMAX1(0.0,IMPERV/100.0)
+          VEGF    = (1.0 - IMF) * VEGFRC
+          SOILF   = (1.0 - IMF) * (1.0 - VEGFRC)
+          CT      = 1./( IMF/CT_IMPERV + VEGF/CV + SOILF/CG)                        
+          CT      = 1./(SNOW_FRA/CT_SNOW + (1-SNOW_FRA)/CT)
+          CAPG    = 1.0/CT          
           SOILFLX = 2.0 * PI * TAUINV * (TG - T2)
           GRDFLX  = SOILFLX / CT
         ENDIF
         !-----------------------------------------------------------------------------------------
-
+ 
         !--------------------------------------------------------------------
         !-- ASSIMILATION --- COMPUTE SOIL MOISTURE NUDGING FROM TA2 and RH2               
         !-------COMPUTE ASSIMILATION COEFFICIENTS FOR ALL I                            
@@ -1386,8 +1383,10 @@ CONTAINS
           !-- Calculate the coefficients for implicit calculation of TG
           CQ1      = (1.0 - 0.622 * LV * CRANKP / (r_d * TG)) * QSS
           CQ2      = 0.622 * LV * QSS * CRANKP / (r_d * TG * TG)
-          CQ3      = DENS1 * (1.0 - VEGFRC) / (RAW + RSOIL)
-!          CQ3      = DENS1 * BETAP * (1.0 - VEGFRC) / RAW
+          CQ3BG    = DENS1 * (1.0 - VEGFRC) / (RAW + RSOIL)
+          CQ3VW    = DENS1 * VEGFRC*SIGG / RAW
+          CQ3VG    = DENS1 * VEGFRC / (RAW + RSOIL + RINC)
+          CQ3      = CQ3BG + CQ3VW + CQ3VG
           COEFFNP1 = 1.0 + DTPBL * CRANKP * (4.0 * EMISSI *  STBOLT * TG ** 3    &
                      * CT + DENS1 * CPAIR / RAH * CPOT * CT + 2.0 * PI           &
                      * TAUINV ) + DTPBL * (CT * LV * CQ2 * (CQ3 + CQ4))
@@ -1510,8 +1509,8 @@ CONTAINS
       SUBROUTINE QFLUX (DENS1,  QV1,   TA1,  RG,     RAW, QSS,           & ! in
                         VEGFRC, ISNOW, ISTI, IFLAND, LAI, BETAP,         & ! in
                         WG,     W2,    WR,                               & ! in
-                        RSTMIN, WWLT,  WFC,  RSOIL,                      & ! in  !Soil model updates - JEP 12/14
-                        EG,     ER,    ETR,  CQ4,    RS,  FASS)            ! out
+                        RSTMIN, WWLT,  WFC,  RSOIL, RINC,                & ! in
+                        EG,     ER,    ETR,  CQ4,    RS,  FASS, SIGG )     ! out        
 
 !-------------------------------------------------------------------------
 !                                                              
@@ -1548,9 +1547,10 @@ CONTAINS
 !-- EG           evaporation from ground (bare soil)
 !-- ER           evaporation from canopy
 !-- ETR          transpiration from vegetation
-!-- CQ4
+!-- CQ4          CQ4 is used for the implicit calculation of TG in SURFACE
 !-- RS           surface resistence
 !-- FASS         parameter for soil moisture nudging
+!-- SIGG         near ground-first layer moisture difference for evap or dew (1)
 !-------------------------------------------------------------------------
 !-------------------------------------------------------------------------
 
@@ -1565,14 +1565,14 @@ CONTAINS
                                VEGFRC, LAI,                              &
                                WG, W2, WR, RSTMIN   
       REAL ,    INTENT(INOUT)  :: BETAP, RSOIL
-      REAL,     INTENT(IN)   :: WWLT, WFC
+      REAL,     INTENT(IN)   :: WWLT, WFC, RINC
 
-      REAL ,    INTENT(OUT) :: EG, ER, ETR, CQ4, RS, FASS
+      REAL ,    INTENT(OUT) :: EG, ER, ETR, CQ4, RS, FASS, SIGG
 
 !... Local Variables
 
 !... Real
-      REAL    :: WRMAX, DELTA, SIGG, RADL, RADF, W2AVAIL, W2MXAV
+      REAL    :: WRMAX, DELTA, RADL, RADF, W2AVAIL, W2MXAV
       REAL    :: FTOT, F1, F2, F3,  F4
       REAL    :: FSHELT, GS, GA, FX
       REAL    :: PAR, F1MAX
@@ -1590,19 +1590,15 @@ CONTAINS
       CQ4 = 0.0
       
 !... GROUND EVAPORATION (DEPOSITION)
-!      IF (QSS .LT. QV1) BETAP = 1.0  
       IF (QSS .LT. QV1) RSOIL = 0.0
-!      EG = DENS1 * (1.0 - VEGFRC) * BETAP * (QSS - QV1) / RAW
-      EG = DENS1 * (1.0 - VEGFRC) * (QSS - QV1) / (RAW + RSOIL)
+      EG = DENS1 * (QSS - QV1) * ((1.0 - VEGFRC) / (RAW + RSOIL) + VEGFRC/(RAW + RINC +RSOIL))
 
-      !!---------------------------------------------------------------------
 !... CANOPY
       IF (IFLAND .LT. 1.5 .AND. VEGFRC .GT. 0.0)  THEN
         WRMAX = 0.2E-3 * VEGFRC * LAI   ! in unit m
         IF (WR .LE. 0.0) THEN
           DELTA = 0.0
         ELSE
-!         DELTA = (WR / WRMAX) ** 0.66667
           DELTA = WR / WRMAX           ! referred to SiB model
         ENDIF
         
@@ -1622,19 +1618,11 @@ CONTAINS
         
         !!!-RADIATION
         IF (RSTMIN .GT. 130.0) THEN
-!          RADL = 30.0                                            ! W/M2
-!          F1MAX = 1.-0.03*LAI
           F1MAX = 1.-0.02*LAI    !Echer2015  Trees
         ELSE
-!          RADL = 100.0                                           ! W/M2
-!          F1MAX = 1.-0.05*LAI
           F1MAX = 1.-0.07*LAI    !Echer2015 crops/grass
         ENDIF
-!        RADF = 1.1 * RG / (RADL * LAI)                  ! NP89 - EQN34
-!        F1   = (RSTMIN / RSMAX + RADF) / (1.0 + RADF)
-!        PAR = 0.45 * RG
         PAR = 0.45 * RG * 4.566  ! converted from W/m2 to umoles/m2/s  (1/.219)  Echer2015
-!        F1 = F1MAX*(2./(1.+EXP(-0.014*PAR))-1.)
         F1 = F1MAX*(1.0-exp(-0.0017*PAR))   !Echer2015
         F1 = AMAX1(F1,RSTMIN / RSMAX)
 
@@ -1730,7 +1718,6 @@ CONTAINS
       ALPH2 = A2MAX * FALPH * (1.0 - VEGFRC) * FTEXT
       BET1  = B1MAX * FBET  *        VEGFRC  * FTEXT
       BET2  = B2MAX * FBET  *        VEGFRC  * FTEXT
-      !T2NUDF = 1.0E-5 * MAX((1.0 - 5.0 * FALPH),0.0)   ! T2 Nudging at night
       T2NUDF = 1.0E-5 * ( VEGFRC*MAX((1.0 - 5.0 * FALPH),0.0) + (1-VEGFRC) )  !  T2 Nudging at night and day for non-veg frac - jp 10/30/14
 
     END SUBROUTINE smass
@@ -1926,10 +1913,6 @@ CONTAINS
       FJP   = 0.134 * AVC + 3.4
       FWRES = 0.00123 * AVC - 0.00066 * AVSLT + 0.0405  !J. Pleim fitted function
       FWRES = AMAX1(FWRES, 0.01)                        !L. Ran set minimum
-
-      !SSMPOT = -10.0 * 10.0**(1.88 - 0.0131 * AVS)   !compute saturated mineral soil matric potential CLM4.5
-      !FWRES = FWSAT * (SSMPOT/DSMPOT)**(1.0 / FB)    !Swenson and Lawrence 2014, Dingman 2002
-                            
     
     ! Compute W2 using soil moisture availiability if pxlsm_smois_init (in namelist) is not zero
     IF (ITIMESTEP .EQ. 1 .AND. PXLSM_SMOIS_INIT .GT. 0) THEN

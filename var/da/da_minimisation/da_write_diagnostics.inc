@@ -3,6 +3,9 @@ subroutine da_write_diagnostics(it, grid,num_qcstat_conv, ob, iv, re, y, j)
    !---------------------------------------------------------------------------
    ! Purpose: Output data assimilation diagnostics
    !---------------------------------------------------------------------------
+#if (WRF_CHEM == 1)
+use da_control, only : stats_unit2
+#endif
 
    implicit none
 
@@ -55,9 +58,14 @@ subroutine da_write_diagnostics(it, grid,num_qcstat_conv, ob, iv, re, y, j)
    if (iv%info(profiler)%ntotal > 0) call da_oi_stats_profiler (stats_unit, iv, ob)
    if (iv%info(buoy)%ntotal     > 0) call da_oi_stats_buoy     (stats_unit, iv, ob)
    if (iv%info(radar)%ntotal    > 0) call da_oi_stats_radar    (stats_unit, iv)
+   if (iv%info(lightning)%ntotal> 0) call da_oi_stats_lightning(stats_unit, iv)
    if (iv%info(bogus)%ntotal    > 0) call da_oi_stats_bogus    (stats_unit, iv)
    if (iv%info(airsr)%ntotal    > 0) call da_oi_stats_airsr    (stats_unit, iv)
    if (iv%info(rain)%ntotal     > 0) call da_oi_stats_rain     (stats_unit, iv)
+
+#if (WRF_CHEM == 1)
+   if (iv%info(chemic_surf)%ntotal > 0) call da_oi_stats_chem_sfc (stats_unit2, iv)
+#endif
 
 #if defined(RTTOV) || defined(CRTM)
    if (iv%num_inst > 0) call da_oi_stats_rad (stats_unit, iv)
@@ -94,9 +102,14 @@ if (.not. anal_type_verify) then
    if (iv%info(profiler)%ntotal > 0) call da_ao_stats_profiler (stats_unit, iv, re, ob)
    if (iv%info(buoy)%ntotal     > 0) call da_ao_stats_buoy     (stats_unit, iv, re, ob)
    if (iv%info(radar)%ntotal    > 0) call da_ao_stats_radar    (stats_unit, iv, re)
+   if (iv%info(lightning)%ntotal> 0) call da_ao_stats_lightning(stats_unit, iv, re)
    if (iv%info(bogus)%ntotal    > 0) call da_ao_stats_bogus    (stats_unit, iv, re)
    if (iv%info(airsr)%ntotal    > 0) call da_ao_stats_airsr    (stats_unit, iv, re)
    if (iv%info(rain)%ntotal     > 0) call da_ao_stats_rain     (stats_unit, iv, re)  
+
+#if (WRF_CHEM == 1)
+   if (iv%info(chemic_surf)%ntotal > 0) call da_ao_stats_chem_sfc (stats_unit2, iv, re, ob)
+#endif
 
 #if defined(CRTM) || defined(RTTOV)
    if (iv%num_inst > 0) call da_ao_stats_rad (stats_unit, iv, re)
@@ -108,7 +121,11 @@ if (.not. anal_type_verify) then
    ! [3.0] Calculate analysis increment (A-B) statistics:
    !---------------------------------------------------------------------------
 
+#if (WRF_CHEM == 1)
+   call da_analysis_stats (grid, stats_unit, stats_unit2)
+#else
    call da_analysis_stats (grid, stats_unit)
+#endif
 
    !---------------------------------------------------------------------------
    ! [4.0] Write VAR diagnostic :
@@ -143,6 +160,20 @@ end if
    if ( write_gts_omb_oma ) then
       call da_final_write_obs(it, iv)
    end if
+
+#if (WRF_CHEM == 1)
+   if ( write_gts_omb_oma ) then
+      call da_write_obs_chem_sfc(it, ob, iv, re)
+      if (chemicda_opt == 5) then
+         call da_final_write_obs_chem_sfc(it, iv)
+         call da_final_write_obs_gas_sfc(it, iv)
+      else if (chemicda_opt == 4) then
+         call da_final_write_obs_gas_sfc(it, iv)
+      else
+         call da_final_write_obs_chem_sfc(it, iv)
+      end if
+   end if
+#endif
 
 if (.not. anal_type_verify) then
    if ( write_unpert_obs ) then

@@ -40,6 +40,10 @@
             mp_physics, ra_lw_physics, ra_sw_physics, sf_sfclay_physics, &
             sf_surface_physics, bl_pbl_physics, cu_physics, hypsometric_opt, sf_lake_physics, &
             use_theta_m, use_maxw_level, use_trop_level,hybrid_opt, gwd_opt
+#if ( WRF_CMAQ == 1 )
+    INTEGER wrf_cmaq_option
+    LOGICAL direct_sw_feedback
+#endif
     INTEGER swint_opt, aer_type,aer_aod550_opt,aer_angexp_opt,aer_ssa_opt,aer_asy_opt, aer_opt
     REAL    aer_aod550_val,aer_angexp_val,aer_ssa_val,aer_asy_val,etac
     REAL    khdif, kvdif, swrad_scat, dampcoef,radt,bldt,cudt
@@ -47,6 +51,7 @@
     INTEGER sf_urban_physics, w_damping, smooth_option, feedback, surface_input_source, sst_update
     INTEGER skebs_on, sppt_on, rand_perturb_on, nens,ISEED_SKEBS,ISEED_SPPT,ISEED_RAND_PERT
     INTEGER skebs_vertstruc, sppt_vertstruc, rand_pert_vertstruc
+    INTEGER ghg_input
     INTEGER LMINFORC,LMAXFORC,KMINFORC,KMAXFORC,LMINFORCT,LMAXFORCT,KMINFORCT,KMAXFORCT
     INTEGER NTASKS_X, NTASKS_Y
     REAL    gridpt_stddev_rand_pert,stddev_cutoff_rand_pert,timescale_rand_pert
@@ -87,6 +92,7 @@
     CHARACTER*80  char_junk
     CHARACTER(LEN=256) :: MMINLU
     INTEGER    ibuf(1)
+    LOGICAL    lbuf(1)
     REAL       rbuf(1)
     TYPE(WRFU_TimeInterval) :: bdy_increment
     TYPE(WRFU_Time)         :: next_time, currentTime, startTime
@@ -137,6 +143,10 @@
     call nl_get_khdif              ( grid%id,  khdif              )
     call nl_get_kvdif              ( grid%id,  kvdif              )
     call nl_get_mp_physics         ( grid%id,  mp_physics         )
+#if ( WRF_CMAQ == 1 )
+    call nl_get_wrf_cmaq_option    ( grid%id,  wrf_cmaq_option    )
+    call nl_get_direct_sw_feedback ( grid%id,  direct_sw_feedback )
+#endif
     call nl_get_ra_lw_physics      ( grid%id,  ra_lw_physics      )
     call nl_get_ra_sw_physics      ( grid%id,  ra_sw_physics      )
     call nl_get_sf_sfclay_physics  ( grid%id,  sf_sfclay_physics  )
@@ -177,6 +187,7 @@
     call nl_get_swrad_scat           ( 1      ,  swrad_scat           )
     call nl_get_sf_urban_physics     ( grid%id,  sf_urban_physics     )
     call nl_get_w_damping            ( 1      ,  w_damping            )
+    call nl_get_ghg_input            ( 1      ,  ghg_input            )
 
 #if (EM_CORE == 1)
     call nl_get_hypsometric_opt    ( 1, hypsometric_opt           )
@@ -345,11 +356,8 @@
     CALL wrf_put_dom_ti_char ( fid , 'START_DATE', TRIM(start_date) , ierr )
     IF ( switch .EQ. input_only) THEN
        CALL wrf_put_dom_ti_char ( fid , 'SIMULATION_START_DATE', TRIM(start_date) , ierr )
-#if ( HWRF == 1 )
-    ELSE
-#else
-    ELSE IF ( ( switch .EQ. restart_only ) .OR. ( switch .EQ. history_only ) ) THEN
-#endif
+    ELSE IF ( ( switch .EQ. restart_only ) .OR. ( switch .EQ. history_only ) .OR.  &
+              ( ( switch .GE. auxhist1_only ) .AND. ( switch .LE. auxhist24_only ) ) ) THEN
        CALL nl_get_simulation_start_year   ( 1, simulation_start_year   )
        CALL nl_get_simulation_start_month  ( 1, simulation_start_month  )
        CALL nl_get_simulation_start_day    ( 1, simulation_start_day    )
@@ -471,11 +479,6 @@ endif
     END IF
 #endif
 
-#if (NMM_CORE == 1)
-    CALL wrf_put_dom_ti_real ( fid , 'WBD0' , grid%wbd0 , 1 , ierr )
-    CALL wrf_put_dom_ti_real ( fid , 'SBD0' , grid%sbd0 , 1 , ierr )
-#endif
-
     CALL wrf_put_dom_ti_integer( fid, 'AERCU_OPT'          , config_flags%aercu_opt          , 1, ierr )
     CALL wrf_put_dom_ti_real   ( fid, 'AERCU_FCT'          , config_flags%aercu_fct          , 1, ierr )
 #if (EM_CORE == 1)
@@ -559,7 +562,8 @@ endif
        END IF
     END IF
 
-    IF (switch .EQ. history_only) THEN
+    IF ( ( switch .EQ. history_only ) .OR.  &
+         ( ( switch .GE. auxhist1_only ) .AND. ( switch .LE. auxhist24_only ) ) ) THEN
        CALL    wrf_put_dom_ti_integer( fid, 'SKEBS_ON'           , config_flags%skebs_on           , 1, ierr )
        IF ( config_flags%skebs_on .NE. 0 )  THEN
           CALL wrf_put_dom_ti_real   ( fid, 'TOT_BACKSCAT_PSI'   , config_flags%tot_backscat_psi   , 1, ierr )
@@ -601,22 +605,18 @@ endif
      IF ( config_flags%perturb_bdy .NE. 0 ) THEN
           CALL wrf_put_dom_ti_integer( fid, 'PERTURB_BDY',        config_flags%perturb_bdy, 1, ierr )
      END IF
-     CALL wrf_put_dom_ti_integer( fid, 'SPEC_BDY_FINAL_MU',  config_flags%spec_bdy_final_mu, 1, ierr )
      CALL wrf_put_dom_ti_integer( fid, 'USE_Q_DIABATIC',     config_flags%use_q_diabatic,    1, ierr )
     END IF
 #endif
 
 ! added by SYHA (09-19-2014)
-#if ((WRF_CHEM == 1) &&  (EM_CORE == 1))
+#if ((WRF_CHEM == 1) &&  (EM_CORE == 1) && (DA_CORE != 1))
      IF ( config_flags%perturb_chem_bdy .NE. 0 ) THEN
           CALL wrf_put_dom_ti_integer( fid, 'PERTURB_CHEM_BDY', config_flags%perturb_chem_bdy, 1, ierr )
      END IF
 #endif
 
 ! added this metadatum for H. Chuan, NCEP, 030417, JM
-#if (NMM_CORE == 1)
-          CALL wrf_put_dom_ti_char ( fid , 'GRIDTYPE',  'E' , ierr )
-#endif
 #if (EM_CORE == 1)
           CALL wrf_put_dom_ti_char ( fid , 'GRIDTYPE',  'C' , ierr )
 #endif
@@ -634,6 +634,13 @@ endif
     CALL wrf_put_dom_ti_real    ( fid , 'KHDIF' ,  rbuf , 1 , ierr )
     rbuf(1) = kvdif
     CALL wrf_put_dom_ti_real    ( fid , 'KVDIF' ,  rbuf , 1 , ierr )
+#if ( WRF_CMAQ == 1 )
+    ibuf(1) = wrf_cmaq_option
+    CALL wrf_put_dom_ti_integer ( fid , 'WRF_CMAQ_OPTION' ,  ibuf , 1 , ierr )
+    lbuf(1) = direct_sw_feedback
+! Note the code will turn logical T/F to integer 1/0 in the output
+    CALL wrf_put_dom_ti_logical ( fid , 'DIRECT_SW_FEEDBACK' ,  lbuf , 1 , ierr )
+#endif
     ibuf(1) = mp_physics
     CALL wrf_put_dom_ti_integer ( fid , 'MP_PHYSICS' ,  ibuf , 1 , ierr )
     ibuf(1) = ra_lw_physics
@@ -653,11 +660,14 @@ endif
 
     ! added netcdf-specific metadata:
     IF ( ( use_package( io_form ) == IO_NETCDF ) .OR. &
+         ( use_package( io_form ) == IO_NETCDFPAR  ) .OR. &
          ( use_package( io_form ) == IO_PHDF5  ) .OR. &
          ( use_package( io_form ) == IO_PIO    ) .OR. &
+         ( use_package( io_form ) == IO_ADIOS2 ) .OR. &
          ( use_package( io_form ) == IO_PNETCDF ) ) THEN
       CALL wrf_put_dom_ti_integer ( fid, 'SURFACE_INPUT_SOURCE', surface_input_source , 1 , ierr )
       CALL wrf_put_dom_ti_integer ( fid, 'SST_UPDATE', sst_update , 1 , ierr )
+      CALL wrf_put_dom_ti_integer ( fid, 'GHG_INPUT', ghg_input , 1 , ierr )
 #if (EM_CORE == 1)
       CALL wrf_put_dom_ti_integer ( fid, 'GRID_FDDA', grid_fdda , 1 , ierr )
       CALL wrf_put_dom_ti_integer ( fid, 'GFDDA_INTERVAL_M', gfdda_interval_m , 1 , ierr )
@@ -676,9 +686,12 @@ endif
     CALL wrf_put_dom_ti_integer ( fid, 'SF_URBAN_PHYSICS', sf_urban_physics , 1 , ierr )
     CALL wrf_put_dom_ti_integer ( fid, 'SF_SURFACE_MOSAIC', config_flags%sf_surface_mosaic     , 1 , ierr ) 
     CALL wrf_put_dom_ti_integer ( fid, 'SF_OCEAN_PHYSICS', config_flags%sf_ocean_physics     , 1 , ierr ) 
+    CALL wrf_put_dom_ti_logical ( fid, 'SLUCM_DISTRIBUTED_DRAG', config_flags%slucm_distributed_drag, 1, ierr)
+    CALL wrf_put_dom_ti_integer ( fid, 'DISTRIBUTED_AHE_OPT', config_flags%distributed_ahe_opt, 1, ierr)
 #endif
 
-      IF ( switch .EQ. history_only ) THEN
+      IF ( ( switch .EQ. history_only ) .OR.  &
+           ( ( switch .GE. auxhist1_only ) .AND. ( switch .LE. auxhist24_only ) ) ) THEN
       CALL wrf_put_dom_ti_integer ( fid, 'SHCU_PHYSICS',     config_flags%shcu_physics , 1 , ierr )
       CALL wrf_put_dom_ti_integer ( fid, 'MFSHCONV',         config_flags%mfshconv , 1 , ierr )
       CALL wrf_put_dom_ti_integer ( fid, 'FEEDBACK', feedback , 1 , ierr )
@@ -774,6 +787,8 @@ endif
       CALL wrf_put_dom_ti_integer   ( fid, 'SCALAR_PBLMIX', scalar_pblmix , 1 , ierr )
       CALL wrf_put_dom_ti_integer   ( fid, 'YSU_TOPDOWN_PBLMIX', ysu_topdown_pblmix , 1 , ierr )
       CALL wrf_put_dom_ti_integer   ( fid, 'GRAV_SETTLING', grav_settling , 1 , ierr )
+      CALL wrf_put_dom_ti_integer   ( fid, 'CLDOVRLP', config_flags%cldovrlp , 1 , ierr )
+      CALL wrf_put_dom_ti_integer   ( fid, 'IDCOR',    config_flags%idcor ,    1 , ierr )
 
 #endif
 
@@ -795,6 +810,8 @@ endif
         CALL wrf_put_dom_ti_integer   ( fid, 'OPT_SOIL',    config_flags%opt_soil    , 1 , ierr )
         CALL wrf_put_dom_ti_integer   ( fid, 'OPT_PEDO',    config_flags%opt_pedo    , 1 , ierr )
         CALL wrf_put_dom_ti_integer   ( fid, 'OPT_CROP',    config_flags%opt_crop    , 1 , ierr )
+        CALL wrf_put_dom_ti_integer   ( fid, 'OPT_IRR',     config_flags%opt_irr     , 1 , ierr )
+        CALL wrf_put_dom_ti_integer   ( fid, 'OPT_IRRM',    config_flags%opt_irrm    , 1 , ierr )
       ENDIF
 
       CALL wrf_put_dom_ti_integer   ( fid, 'DFI_OPT',          config_flags%dfi_opt      , 1 , ierr )
@@ -802,7 +819,7 @@ endif
       CALL wrf_put_dom_ti_integer   ( fid, 'NTASKS_Y',         ntasks_y                  , 1 , ierr )
       CALL wrf_put_dom_ti_integer   ( fid, 'NTASKS_TOTAL',     ntasks_x*ntasks_y         , 1 , ierr )
 
-      ENDIF ! history_only
+      ENDIF ! history_only and aux history
 
 #if (WRF_CHEM == 1 && WRF_KPP == 1)
       IF ( switch == auxhist9_only .and. config_flags%irr_opt /= 0 ) THEN
@@ -814,6 +831,7 @@ endif
 #if (EM_CORE == 1) && ( DA_CORE != 1)
       IF ( ( switch .EQ. input_only   ) .OR. &
            ( switch .EQ. history_only ) .OR. &
+           ( ( switch .GE. auxhist1_only ) .AND. ( switch .LE. auxhist24_only ) ) .OR. &
            ( switch .EQ. restart_only ) ) THEN
          IF ( grid%this_is_an_ideal_run ) THEN
             CALL wrf_put_dom_ti_char ( fid , 'SIMULATION_INITIALIZATION_TYPE', "IDEALIZED DATA" , ierr )
@@ -954,11 +972,7 @@ endif
     CALL wrf_put_dom_ti_integer ( fid , 'ISURBAN' ,  config_flags%isurban , 1 , ierr )
     CALL wrf_put_dom_ti_integer ( fid , 'ISOILWATER' ,  config_flags%isoilwater , 1 , ierr )
 ! added these fields for restarting of moving nests, JM
-!For HWRF: zhang
-#if ( HWRF == 1 )
-    CALL wrf_put_dom_ti_integer ( fid , 'I_PARENT_START' ,  grid%i_parent_start  , 1 , ierr )
-    CALL wrf_put_dom_ti_integer ( fid , 'J_PARENT_START' ,  grid%j_parent_start  , 1 , ierr )
-#elif ! defined(EM_CORE)
+#if ! defined(EM_CORE)
     CALL wrf_put_dom_ti_integer ( fid , 'I_PARENT_START' ,  config_flags%i_parent_start  , 1 , ierr )
     CALL wrf_put_dom_ti_integer ( fid , 'J_PARENT_START' ,  config_flags%j_parent_start  , 1 , ierr )
 #endif
@@ -1013,6 +1027,7 @@ endif
           switch .EQ. restart_only    ) THEN
       newswitch = switch
       p => grid%head_statevars%next
+      CALL wrf_start_io_timestep(fid, ierr)
       DO WHILE ( ASSOCIATED( p ) )
         IF ( p%ProcOrient .NE. 'X' .AND. p%ProcOrient .NE. 'Y' ) THEN   ! no I/O for xposed variables
           IF ( p%Ndim .EQ. 0 ) THEN
@@ -1525,10 +1540,13 @@ endif
         ENDIF
         p => p%next
       ENDDO
+      CALL wrf_end_io_timestep(fid, ierr)
     ELSE
        IF ( switch .EQ. boundary_only ) THEN
+         CALL wrf_start_io_timestep(fid, ierr)
          CALL wrf_debug ( 300 , 'output_wrf: calling code in wrf_bdyout.inc' )
          CALL wrf_bdyout( fid , grid , config_flags, switch, dryrun,  ierr )
+         CALL wrf_end_io_timestep(fid, ierr)
        ENDIF
     ENDIF
 

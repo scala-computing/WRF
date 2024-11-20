@@ -68,7 +68,7 @@ MODULE module_domain
      MODULE PROCEDURE get_ijk_from_grid1, get_ijk_from_grid2
    END INTERFACE
 
-   INTEGER, PARAMETER :: max_hst_mods = 200
+   INTEGER, PARAMETER :: max_hst_mods = 1000
 
 CONTAINS
 
@@ -325,7 +325,6 @@ CONTAINS
    RETURN
    END SUBROUTINE get_ijk_from_subgrid
 #endif
-
 
 ! Default version ; Otherwise module containing interface to DM library will provide
 
@@ -731,14 +730,6 @@ CONTAINS
          parent%nests(kid)%ptr => new_grid
          new_grid%child_of_parent(1) = kid    ! note assumption that nest can have only 1 parent
          parent%num_nests = parent%num_nests + 1
-#if ( NMM_CORE == 1 ) 
-!jm 20150810, this replaces the compile-time logic associated with the CPP constant HRD_MULTIPLE_STORMS
-! used in solve_nmm of the HWRF version to decide whether or not to call the coupler.  If there is more than
-! one nest to a parent then that implies there are multiple storms, so we turn off the coupling.
-         IF ( parent%num_nests .GT. 1 ) THEN
-           CALL nl_set_multi_storm(1,.FALSE.)
-         ENDIF
-#endif
       END IF
       new_grid%id = domain_id                 ! this needs to be assigned prior to calling wrf_patch_domain
       new_grid%active_this_task = active
@@ -991,14 +982,7 @@ CONTAINS
       CALL wrf_dm_define_comms( grid )
 #endif
 
-#if ( NMM_CORE==1 )
-!      grid%interp_mp = .not. ( size(grid%f_ice)>1 .or. size(grid%f_rain)>1 .or. size(grid%f_rimef)>1 )
-      grid%interp_mp = .not. (in_use_for_config(grid%id,'f_ice')   .or.&
-                              in_use_for_config(grid%id,'f_rain')  .or. & 
-                              in_use_for_config(grid%id,'f_rimef') )
-#else
       grid%interp_mp = .true.
-#endif
 
    END SUBROUTINE alloc_and_configure_domain
 
@@ -1011,7 +995,7 @@ CONTAINS
      INTEGER,       INTENT(IN)    :: noutstr  ! length of outstr
      LOGICAL,       INTENT(INOUT) :: noerr     ! status
      !local
-     INTEGER, PARAMETER :: MAX_DEXES = 100
+     INTEGER, PARAMETER :: MAX_DEXES = 1000
      INTEGER I, PREV, IDEX
      INTEGER DEXES(MAX_DEXES)
      outstr = ""
@@ -1067,8 +1051,8 @@ CONTAINS
       TYPE(fieldlist), POINTER :: p, q
       INTEGER, PARAMETER :: read_unit = 10
       LOGICAL, EXTERNAL  :: wrf_dm_on_monitor
-      CHARACTER*256      :: fname, inln, mess, dname, t1, lookee
-      CHARACTER*256      :: fieldlst
+      CHARACTER*8000     :: inln, t1, fieldlst
+      CHARACTER*256      :: fname, mess, dname, lookee
       CHARACTER*1        :: op, strmtyp
       CHARACTER*3        :: strmid
       CHARACTER*10       :: strmtyp_name
@@ -1134,10 +1118,10 @@ CONTAINS
                     WRITE(mess,*)'W A R N I N G : invalid stream id ',istrm,' (should be 0 <= id <= ',last_history,'). Line ',lineno
                     gavewarning = .TRUE.
                   ENDIF
-                  CALL get_fieldstr(4,':',inln,fieldlst,1024,noerr) ! get list of fields
+                  CALL get_fieldstr(4,':',inln,fieldlst,8000,noerr) ! get list of fields
                   IF ( noerr ) THEN
                     fieldno = 1
-                    CALL get_fieldstr(fieldno,',',fieldlst,t1,256,noerr)
+                    CALL get_fieldstr(fieldno,',',fieldlst,t1,8000,noerr)
                     CALL change_to_lower_case(t1,lookee)
                     DO WHILE ( noerr )    ! linear search, blargh...
                       p => grid%head_statevars%next
@@ -1310,18 +1294,10 @@ CONTAINS
                                   sm31x, em31x, sm32x, em32x, sm33x, em33x, &
                                   sm31y, em31y, sm32y, em32y, sm33y, em33y )
 
-      USE module_alloc_space_0, ONLY : alloc_space_field_core_0
-      USE module_alloc_space_1, ONLY : alloc_space_field_core_1
-      USE module_alloc_space_2, ONLY : alloc_space_field_core_2
-      USE module_alloc_space_3, ONLY : alloc_space_field_core_3
-      USE module_alloc_space_4, ONLY : alloc_space_field_core_4
-      USE module_alloc_space_5, ONLY : alloc_space_field_core_5
-      USE module_alloc_space_6, ONLY : alloc_space_field_core_6
-      USE module_alloc_space_7, ONLY : alloc_space_field_core_7
-      USE module_alloc_space_8, ONLY : alloc_space_field_core_8
-      USE module_alloc_space_9, ONLY : alloc_space_field_core_9
 
       IMPLICIT NONE
+
+#include "allocs.inc"
 
       !  Input data.
 
@@ -1354,96 +1330,13 @@ CONTAINS
       IF ( grid%id .EQ. 1 ) CALL wrf_message ( &
           'DYNAMICS OPTION: Eulerian Mass Coordinate ')
 #endif
-#if (NMM_CORE == 1)
-      IF ( grid%id .EQ. 1 ) &
-          CALL wrf_message ( 'DYNAMICS OPTION: nmm dyncore' )
-#endif
 
       CALL set_scalar_indices_from_config( id , idum1 , idum2 )
 
       num_bytes_allocated = 0 
 
-      ! now separate modules to reduce the size of module_domain that the compiler sees
-      CALL alloc_space_field_core_0 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated , &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_1 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_2 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_3 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_4 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_5 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_6 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_7 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_8 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
-      CALL alloc_space_field_core_9 ( grid,   id, setinitval_in ,  tl_in , inter_domain_in , okay_to_alloc_in, num_bytes_allocated ,  &
-                                    sd31, ed31, sd32, ed32, sd33, ed33, &
-                                    sm31 , em31 , sm32 , em32 , sm33 , em33 , &
-                                    sp31 , ep31 , sp32 , ep32 , sp33 , ep33 , &
-                                    sp31x, ep31x, sp32x, ep32x, sp33x, ep33x, &
-                                    sp31y, ep31y, sp32y, ep32y, sp33y, ep33y, &
-                                    sm31x, em31x, sm32x, em32x, sm33x, em33x, &
-                                    sm31y, em31y, sm32y, em32y, sm33y, em33y )
+      ! Now use auto-split routines to allocate
+#include "allocs_calls.inc"
 
       IF ( .NOT. grid%have_displayed_alloc_stats ) THEN
         ! we do not want to see this message more than once, as can happen with the allocation and
@@ -1709,6 +1602,7 @@ CONTAINS
       TYPE(fieldlist), POINTER :: p, q
       p => grid%head_statevars
       DO WHILE ( ASSOCIATED( p ) )
+        if (p%varname.eq."chem_ic")  exit
          q => p ; p => p%next ; DEALLOCATE(q)
       ENDDO
       NULLIFY(grid%head_statevars) ; NULLIFY( grid%tail_statevars)
@@ -1751,10 +1645,6 @@ CONTAINS
       !  Input data.
 
       TYPE(domain)              , POINTER :: grid
-
-      !  Local data.
-
-      INTEGER                             ::  ierr
 
 # include "deallocs.inc"
 
@@ -2636,63 +2526,6 @@ CONTAINS
         ENDIF
 
       END FUNCTION Is_alarm_tstep
-
-
-#if (NMM_CORE==1)
-!******************************************************************************
-! Function to determine if the next NPHS time step is an alarm-timestep for
-! a certain grid:
-! NMM-only -- modify to check whether the next alarm coincides with the next
-! NPHS time step!
-!******************************************************************************
-
-      LOGICAL FUNCTION Is_alarm_tstep_nphs( grid_clock, alarm, nphs )
-
-        IMPLICIT NONE
-
-        TYPE (WRFU_Clock), INTENT(in)  :: grid_clock
-        TYPE (WRFU_Alarm), INTENT(in)  :: alarm
-
-        LOGICAL :: pred1, pred2, pred3
-        INTEGER :: nphs
-
-        Is_alarm_tstep_nphs = .FALSE.
-
-        IF ( ASSOCIATED( alarm%alarmint ) ) THEN
-          IF ( alarm%alarmint%Enabled ) THEN
-            IF ( alarm%alarmint%RingIntervalSet ) THEN
-              pred1 = .FALSE. ; pred2 = .FALSE. ; pred3 = .FALSE.
-              IF ( alarm%alarmint%StopTimeSet ) THEN
-                 PRED1 = ( grid_clock%clockint%CurrTime + grid_clock%clockint%TimeStep*nphs > &
-                      alarm%alarmint%StopTime )
-              ENDIF
-              IF ( alarm%alarmint%RingTimeSet ) THEN
-                 PRED2 = ( ( alarm%alarmint%RingTime - &
-                      grid_clock%clockint%TimeStep <= &
-                      grid_clock%clockint%CurrTime )     &
-                      .AND. ( grid_clock%clockint%CurrTime < alarm%alarmint%RingTime ) )
-              ENDIF
-              IF ( alarm%alarmint%RingIntervalSet ) THEN
-                 PRED3 = ( alarm%alarmint%PrevRingTime + &
-                      alarm%alarmint%RingInterval <= &
-                      grid_clock%clockint%CurrTime + grid_clock%clockint%TimeStep*nphs )
-              ENDIF
-              IF ( ( .NOT. ( pred1 ) ) .AND. &
-                   ( ( pred2 ) .OR. ( pred3 ) ) ) THEN
-                 Is_alarm_tstep_nphs = .TRUE.
-              ENDIF
-            ELSE IF ( alarm%alarmint%RingTimeSet ) THEN
-              IF ( alarm%alarmint%RingTime -&
-                   grid_clock%clockint%TimeStep*nphs <= &
-                   grid_clock%clockint%CurrTime ) THEN
-                 Is_alarm_tstep_nphs = .TRUE.
-              ENDIF
-            ENDIF
-          ENDIF
-        ENDIF
-
-      END FUNCTION Is_alarm_tstep_nphs
-#endif
 
 
 !******************************************************************************

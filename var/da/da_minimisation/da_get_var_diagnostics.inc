@@ -13,7 +13,7 @@ subroutine da_get_var_diagnostics(it, iv, j)
    integer                      :: num_stats_tot
    integer                      :: i,k
    real                         :: jo_radiance
-   real                         :: temp(79)
+   real                         :: temp(82)
 
    if (trace_use) call da_trace_entry("da_get_var_diagnostics")
 
@@ -103,7 +103,10 @@ subroutine da_get_var_diagnostics(it, iv, j)
    temp(77) = j % jo % rain_r
    !temp(78) is j % jo % airep_q listed up with other airep variables
    temp(79) = j % jo % gpseph_eph
-
+   temp(80) = j % jo % lightning_w
+   temp(81) = j % jo % lightning_div
+   temp(82) = j % jo % lightning_qv
+ 
    call da_proc_sum_real(temp(:))
 
    j % jo % synop_u         = temp(1)  
@@ -188,6 +191,10 @@ subroutine da_get_var_diagnostics(it, iv, j)
    j % jo % rain_r          = temp(77)
    j % jo % gpseph_eph      = temp(79)
 
+   j % jo % lightning_w     = temp(80)
+   j % jo % lightning_div   = temp(81)
+   j % jo % lightning_qv    = temp(82)
+
    if (use_rad) then
       jo_radiance = 0.0
       do i = 1, iv%num_inst                 ! loop for sensor
@@ -205,12 +212,12 @@ subroutine da_get_var_diagnostics(it, iv, j)
 
       write(unit=stdout,fmt=*) ' '
       write(unit=stdout,fmt='(A)') 'Diagnostics'
-      write(unit=stdout,fmt='(A,F12.2)')   '   Final cost function J       = ', j % total
+      write(unit=stdout,fmt='(A,F30.2)')   '   Final cost function J       = ', j % total
       write(unit=stdout,fmt=*) ' '
 
       write(unit=stdout,fmt='(a,i8)')    '   Total number of obs.        = ', num_stats_tot
-      write(unit=stdout,fmt='(a,f15.5)') '   Final value of J            = ', j % total
-      write(unit=stdout,fmt='(a,f15.5)') '   Final value of Jo           = ', j % jo % total
+      write(unit=stdout,fmt='(a,f30.5)') '   Final value of J            = ', j % total
+      write(unit=stdout,fmt='(a,f30.5)') '   Final value of Jo           = ', j % jo % total
       write(unit=stdout,fmt='(a,f15.5)') '   Final value of Jd           = ', j % jd
       write(unit=stdout,fmt='(a,f15.5)') '   Final value of Jb           = ', j % jb
       write(unit=stdout,fmt='(a,f15.5)') '   Final value of Jc           = ', j % jc
@@ -469,6 +476,14 @@ subroutine da_get_var_diagnostics(it, iv, j)
                                j % jo % airsr_t, iv % airsr_ef_t, &
                                j % jo % airsr_q, iv % airsr_ef_q, &
                                0.0, 1.0, 0.0, 1.0, 0.0, 1.0
+      end if
+      if (iv%info(lightning)%ntotal > 0) then
+         write(unit=jo_unit,fmt='(a30,2i8,10f15.5)')'lightning obs, Jo(actual)  = ', &
+                               iv%info(lightning)%ntotal, iv%nstats(lightning), &
+                               j % jo % lightning_w, iv % lightning_ef_w, &
+                               j % jo % lightning_div, iv % lightning_ef_div, &
+                               j % jo % lightning_qv, iv % lightning_ef_qv, &
+                               0.0, 1.0, 0.0, 1.0
       end if
       do i = 1, iv%num_inst                 ! loop for sensor
          do k = 1, iv%instid(i)%nchan

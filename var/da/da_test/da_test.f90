@@ -24,7 +24,7 @@ module da_test
    use da_control, only : trace_use,ierr, trace_use_dull, comm,global,stdout,rootproc, &
       sfc_assi_options,typical_qrn_rms,typical_qci_rms,typical_qsn_rms,typical_qgr_rms,jcdfi_use, jcdfi_diag, &
       typical_u_rms,typical_v_rms,typical_w_rms,typical_t_rms, typical_p_rms, typical_rain_rms, &
-      typical_q_rms,typical_qcw_rms,print_detail_testing,typical_rh_rms, &
+      typical_q_rms,typical_qcw_rms,print_detail_testing,typical_rh_rms, typical_div_rms,&
       fg_format, fg_format_wrf_arw_global, fg_format_wrf_arw_regional,fg_format_wrf_nmm_regional, &
       typical_rf_rms,typical_rv_rms, typical_thickness_rms, typical_tb19v_rms,typical_tb37h_rms, &
       typical_tb85h_rms,typical_tb37v_rms,typical_tb85v_rms,typical_tb22v_rms, &
@@ -35,10 +35,11 @@ module da_test
       balance_geocyc, var4d, num_fgat_time,cv_options_hum_specific_humidity, &
       cv_options_hum_relative_humidity, ids, ide, jds, jde, kds, kde, &
       sound, sonde_sfc, mtgirs, synop, profiler, gpsref, gpspw, polaramv, geoamv, ships, metar, &
-      satem, radar, ssmi_rv, ssmi_tb, ssmt1, ssmt2, airsr, pilot, airep, tamdar, tamdar_sfc, rain, &
+      satem, radar, lightning, ssmi_rv, ssmi_tb, ssmt1, ssmt2, airsr, pilot, airep, tamdar, tamdar_sfc, rain, &
       bogus, buoy, qscat, pseudo, radiance, use_radarobs, use_ssmiretrievalobs,use_rainobs, &
-      use_gpsrefobs, use_ssmt1obs, use_ssmitbobs, use_ssmt2obs, use_gpspwobs, &
+      use_gpsrefobs, use_ssmt1obs, use_ssmitbobs, use_ssmt2obs, use_gpspwobs, use_lightningobs, &
       use_gpsztdobs, use_radar_rf, use_radar_rhv, use_rad, crtm_cloud, cloud_cv_options, &
+      use_lightning_qv, use_lightning_w, use_lightning_div, &
       ids,ide,jds,jde,kds,kde, ims,ime,jms,jme,kms,kme, fgat_rain_flags, &
       its,ite,jts,jte,kts,kte, ips,ipe,jps,jpe,kps,kpe, cv_options, cv_size, &
       cloud_cv_options, cp, gas_constant, test_dm_exact, cv_size_domain, &
@@ -72,7 +73,7 @@ module da_test
    use da_statistics, only : da_correlation_coeff1d,da_correlation_coeff2d
    use da_tools_serial, only : da_get_unit,da_free_unit
    use da_tracing, only : da_trace_entry,da_trace_exit
-   use da_transfer_model, only : da_transfer_wrftltoxa,da_transfer_xatowrftl, &
+   use da_transfer_model, only : da_transfer_wrftltoxa,da_transfer_xatowrftl, da_transfer_wrftoxb, &
       da_transfer_xatowrftl_adj,da_transfer_wrftltoxa_adj,da_transfer_wrftoxb
    use da_wrf_interfaces, only : wrf_dm_bcast_real
    use da_wrf_interfaces, only : wrf_debug, wrf_shutdown
@@ -84,6 +85,10 @@ module da_test
       da_transform_vtovv_global_adj, da_transform_vtovv_adj, da_transform_xtoxa, &
       da_transform_xtoxa_adj, da_apply_be, da_apply_be_adj, da_transform_bal, &
       da_transform_bal_adj
+#if (WRF_CHEM == 1)
+   use da_vtox_transforms, only : da_transform_vchemtox, da_transform_vchemtox_adj, &
+       da_transform_vpatox_adj
+#endif
 #ifdef VAR4D
    use da_transfer_model, only : da_transfer_xatowrftl_lbc, da_transfer_xatowrftl_adj_lbc, da_get_2nd_firstguess
    use da_4dvar, only : model_grid, da_tl_model, da_ad_model, input_nl_xtraj, upsidedown_ad_forcing, &
@@ -105,6 +110,11 @@ contains
 #include "da_check_cvtovv_adjoint.inc"
 #include "da_check_vtox_adjoint.inc"
 #include "da_check_vptox_adjoint.inc"
+#if (WRF_CHEM == 1)
+#include "da_check_cvtovv_adjoint_chem.inc"
+#include "da_check_vtox_adjoint_chem.inc"
+#include "da_check_vchemtox_adjoint.inc"
+#endif
 #include "da_check_vp_errors.inc"
 #include "da_check_vvtovp_adjoint.inc"
 #include "da_check_xtovptox_errors.inc"
@@ -123,6 +133,7 @@ contains
 #include "da_check_xtoy_adjoint_ships.inc"
 #include "da_check_xtoy_adjoint_radar.inc"
 #include "da_check_xtoy_adjoint_rain.inc"
+#include "da_check_xtoy_adjoint_lightning.inc"
 #include "da_check_xtoy_adjoint_bogus.inc"
 #include "da_check_xtoy_adjoint_sound.inc"
 #include "da_check_xtoy_adjoint_sonde_sfc.inc"

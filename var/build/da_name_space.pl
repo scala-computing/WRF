@@ -33,7 +33,7 @@ exit;
 
 __DATA__
 ###########################################################################################
-# The following subroutines will be add pre-fix da
+# The following subroutines will be add prefix da
 all_sub_
 call_pkg_and_dist
 collect_generic_and_call_pkg
@@ -53,7 +53,8 @@ med_filter_out
 med_auxinput_in
 med_restart_out
 med_latbound_in
-module_alloc_space
+deallocs_
+allocs_
 module_configure
 module_scalar_tables
 module_nesting
@@ -195,4 +196,5 @@ set_tiles
 wrf_get_dom_ti_integer
 is_this_data_ok_to_use
 check_which_switch
+med_read_qna_emissions
 ###########################################################################################

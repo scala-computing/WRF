@@ -359,7 +359,9 @@ subroutine da_search_obs (ob_type_string, unit_in, num_obs, nth, iv, found_flag)
          if (trace_use) call da_trace_exit("da_search_obs")
          return
       else
-         read(unit_in,*)
+         do k = 1, levels
+           read(unit_in,*)
+         enddo
       endif
    enddo
    !found_flag = .false.
@@ -732,6 +734,34 @@ subroutine da_search_obs (ob_type_string, unit_in, num_obs, nth, iv, found_flag)
          do k = 1, levels
             read(unit_in,*)
          enddo
+      endif
+   enddo
+   !found_flag = .false.
+   rewind (unit_in)
+   read(unit_in,*)
+
+   CASE ('lightning')
+
+   do n = 1, num_obs
+      read(unit_in,'(2i8,2E22.13)') n_dummy, levels, lat, lon
+
+      if ( abs(iv%info(lightning)%lat(1,nth) - lat ) < MIN_ERR     .and.  &
+           abs(iv%info(lightning)%lon(1,nth) - lon ) < MIN_ERR ) then
+
+         do k = 1, levels
+            read(unit_in,'(3(E22.13,i8,3E22.13))')&
+                 iv%lightning(nth)%w(k),&
+                 iv%lightning(nth)%div(k),&
+                 iv%lightning(nth)%qv(k)			 
+         enddo
+
+         !found_flag = .true.
+         rewind (unit_in)
+         read(unit_in,*)
+         if (trace_use) call da_trace_exit("da_search_obs")
+         return
+      else
+         read(unit_in,*)
       endif
    enddo
    !found_flag = .false.

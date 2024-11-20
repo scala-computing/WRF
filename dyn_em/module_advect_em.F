@@ -1,7 +1,7 @@
 
 !WRF:MODEL_LAYER:DYNAMICS
 !
-#if ( defined(ADVECT_KERNEL) )
+#ifdef ADVECT_KERNEL
 ! cpp -traditional-cpp -P -DADVECT_KERNEL module_advect_em.F > advection_kernel.f90
 ! gfortran -ffree-form -ffree-line-length-none advection_kernel.f90
 ! ./a.out
@@ -111,7 +111,7 @@ SUBROUTINE column (loop , data_list, its,ite)
    
 END SUBROUTINE column
 !----------------------------------------------------------------
-#elif ( ! defined(ADVECT_KERNEL) )
+#else
 
 MODULE module_advect_em
 
@@ -1349,8 +1349,8 @@ SUBROUTINE advect_u   ( u, u_old, tendency,            &
 
    IF ( config_flags%open_ys .or. specified ) i_start = MAX(ids+1,its)
    IF ( config_flags%open_ye .or. specified ) i_end   = MIN(ide-1,ite)
-      IF ( config_flags%periodic_x ) i_start = its
-      IF ( config_flags%periodic_x ) i_end = ite
+   IF ( config_flags%periodic_x ) i_start = its
+   IF ( config_flags%periodic_x ) i_end = ite
 
    DO i = i_start, i_end
      vflux(i,kts)=0.
@@ -2818,20 +2818,20 @@ SUBROUTINE advect_v   ( v, v_old, tendency,            &
 !     we can do this using *(my/mx) (see eqn. 45 for example)
 
 
-      i_start = its
-      i_end   = MIN(ite,ide-1)
-      j_start = jts
-      j_end   = jte
+    i_start = its
+    i_end   = MIN(ite,ide-1)
+    j_start = jts
+    j_end   = jte
 
-      DO i = i_start, i_end
-         vflux(i,kts)=0.
-         vflux(i,kte)=0.
-      ENDDO
+    DO i = i_start, i_end
+       vflux(i,kts)=0.
+       vflux(i,kte)=0.
+    ENDDO
 
-      ! Polar boundary conditions are like open or specified
-      ! We don't want to calculate vertical v tendencies at the N or S pole
-      IF ( config_flags%open_ys .or. specified .or. config_flags%polar ) j_start = MAX(jds+1,jts)
-      IF ( config_flags%open_ye .or. specified .or. config_flags%polar ) j_end   = MIN(jde-1,jte)
+    ! Polar boundary conditions are like open or specified
+    ! We don't want to calculate vertical v tendencies at the N or S pole
+    IF ( config_flags%open_ys .or. specified .or. config_flags%polar ) j_start = MAX(jds+1,jts)
+    IF ( config_flags%open_ye .or. specified .or. config_flags%polar ) j_end   = MIN(jde-1,jte)
 
     vert_order_test : IF (vert_order == 6) THEN    
 
@@ -4146,8 +4146,8 @@ SUBROUTINE advect_scalar   ( field, field_old, tendency,    &
 
    IF( (config_flags%open_ys) .and. (jts == jds) ) THEN
 
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MIN( 0.5*(rv(i,k,jts)+rv(i,k,jts+1)), 0. )
          tendency(i,k,jts) = tendency(i,k,jts)                     &
                - rdy*(                                             &
@@ -4162,8 +4162,8 @@ SUBROUTINE advect_scalar   ( field, field_old, tendency,    &
 
    IF( (config_flags%open_ye) .and. (jte == jde)) THEN
 
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MAX( 0.5*(rv(i,k,jte-1)+rv(i,k,jte)), 0. )
          tendency(i,k,j_end) = tendency(i,k,j_end)                   &
                - rdy*(                                               &
@@ -4357,7 +4357,7 @@ SUBROUTINE advect_scalar   ( field, field_old, tendency,    &
    ENDIF vert_order_test
 
 END SUBROUTINE advect_scalar
-#if ( ! defined(ADVECT_KERNEL) )
+#ifndef ADVECT_KERNEL
 
 !---------------------------------------------------------------------------------
 
@@ -4620,14 +4620,14 @@ SUBROUTINE advect_w    ( w, w_old, tendency,            &
         ! (latitudes are as for u grid, longitudes are displaced)
         ! Therefore: flow is only from one side for points next to poles
         IF ( config_flags%polar .AND. (j == jds+1) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) - mrdy*fqy(i,k,jp1)
           END DO
           END DO
         ELSE IF( config_flags%polar .AND. (j == jde) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) + mrdy*fqy(i,k,jp0)
@@ -4934,14 +4934,14 @@ ELSE IF (horz_order == 5 ) THEN
         ! (latitudes are as for u grid, longitudes are displaced)
         ! Therefore: flow is only from one side for points next to poles
         IF ( config_flags%polar .AND. (j == jds+1) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) - mrdy*fqy(i,k,jp1)
           END DO
           END DO
         ELSE IF( config_flags%polar .AND. (j == jde) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) + mrdy*fqy(i,k,jp0)
@@ -5293,14 +5293,14 @@ ELSE IF ( horz_order == 4 ) THEN
        ! (latitudes are as for u grid, longitudes are displaced)
        ! Therefore: flow is only from one side for points next to poles
        IF ( config_flags%polar .AND. (j == jds+1) ) THEN
-         DO k=kts,ktf
+         DO k=kts+1,ktf+1
          DO i = i_start, i_end
            mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
            tendency(i,k,j-1) = tendency(i,k,j-1) - mrdy*fqy(i,k,jp1)
          END DO
          END DO
        ELSE IF( config_flags%polar .AND. (j == jde) ) THEN
-         DO k=kts,ktf
+         DO k=kts+1,ktf+1
          DO i = i_start, i_end
            mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
            tendency(i,k,j-1) = tendency(i,k,j-1) + mrdy*fqy(i,k,jp0)
@@ -5525,14 +5525,14 @@ ELSE IF ( horz_order == 3 ) THEN
        ! (latitudes are as for u grid, longitudes are displaced)
        ! Therefore: flow is only from one side for points next to poles
        IF ( config_flags%polar .AND. (j == jds+1) ) THEN
-         DO k=kts,ktf
+         DO k=kts+1,ktf+1
          DO i = i_start, i_end
            mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
            tendency(i,k,j-1) = tendency(i,k,j-1) - mrdy*fqy(i,k,jp1)
          END DO
          END DO
        ELSE IF( config_flags%polar .AND. (j == jde) ) THEN
-         DO k=kts,ktf
+         DO k=kts+1,ktf+1
          DO i = i_start, i_end
            mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
            tendency(i,k,j-1) = tendency(i,k,j-1) + mrdy*fqy(i,k,jp0)
@@ -5850,15 +5850,15 @@ ELSE IF (horz_order == 2 ) THEN
 !     Here we have:  - partial d/dz (w*rom) = - partial d/dz (w rho w / my)
 !     Therefore we don't need to make a correction for advect_w
 
-      i_start = its
-      i_end   = MIN(ite,ide-1)
-      j_start = jts
-      j_end   = MIN(jte,jde-1)
+    i_start = its
+    i_end   = MIN(ite,ide-1)
+    j_start = jts
+    j_end   = MIN(jte,jde-1)
 
-      DO i = i_start, i_end
-         vflux(i,kts)=0.
-         vflux(i,kte)=0.
-      ENDDO
+    DO i = i_start, i_end
+       vflux(i,kts)=0.
+       vflux(i,kte)=0.
+    ENDDO
 
     vert_order_test : IF (vert_order == 6) THEN    
 
@@ -6106,8 +6106,8 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
 
    REAL , DIMENSION( ims:ime , kms:kme , jms:jme ) , INTENT(IN   ) :: field,     &
                                                                       field_old, &
-                                                                      ru,    &
-                                                                      rv,    &
+                                                                      ru,        &
+                                                                      rv,        &
                                                                       rom
 
    REAL , DIMENSION( ims:ime , jms:jme ) , INTENT(IN   ) :: mut, mub, mu_old
@@ -7297,8 +7297,8 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
 
    IF( (config_flags%open_ys) .and. (jts == jds) ) THEN
 
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MIN( 0.5*(rv(i,k,jts)+rv(i,k,jts+1)), 0. )
          tendency(i,k,jts) = tendency(i,k,jts)                     &
                - rdy*(                                             &
@@ -7313,8 +7313,8 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
 
    IF( (config_flags%open_ye) .and. (jte == jde)) THEN
 
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MAX( 0.5*(rv(i,k,jte-1)+rv(i,k,jte)), 0. )
          tendency(i,k,j_end) = tendency(i,k,j_end)                   &
                - rdy*(                                               &
@@ -7330,8 +7330,8 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
    IF( (config_flags%polar) .and. (jts == jds) ) THEN
 
        ! Assuming rv(i,k,jds) = 0.
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MIN( 0.5*rv(i,k,jts+1), 0. )
          tendency(i,k,jts) = tendency(i,k,jts)                     &
                - rdy*(                                             &
@@ -7347,8 +7347,8 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
    IF( (config_flags%polar) .and. (jte == jde)) THEN
 
        ! Assuming rv(i,k,jde) = 0.
-       DO i = i_start, i_end
        DO k = kts, ktf
+       DO i = i_start, i_end
          vb = MAX( 0.5*rv(i,k,jte-1), 0. )
          tendency(i,k,j_end) = tendency(i,k,j_end)                   &
                - rdy*(                                               &
@@ -7412,6 +7412,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
            fqzl(i,k,j) = mu*(dz/dt)*flux_upwind(field_old(i,k-1,j), field_old(i,k,j  ), cr)
            fqz(i,k,j)=rom(i,k,j)*(fzm(k)*field(i,k,j)+fzp(k)*field(i,k-1,j))
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=kts+2
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7424,6 +7427,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
                    field(i,k-2,j), field(i,k-1,j),      &
                    field(i,k  ,j), field(i,k+1,j),  -vel )
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=ktf-1
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7436,6 +7442,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
                    field(i,k-2,j), field(i,k-1,j),      &
                    field(i,k  ,j), field(i,k+1,j),  -vel )
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=ktf
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7485,6 +7494,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
            fqzl(i,k,j) = mu*(dz/dt)*flux_upwind(field_old(i,k-1,j), field_old(i,k,j  ), cr)
            fqz(i,k,j)=rom(i,k,j)*(fzm(k)*field(i,k,j)+fzp(k)*field(i,k-1,j))
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=kts+2
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7497,6 +7509,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
                    field(i,k-2,j), field(i,k-1,j),      &
                    field(i,k  ,j), field(i,k+1,j),  -vel )
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=ktf-1
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7509,6 +7524,9 @@ SUBROUTINE advect_scalar_pd   ( field, field_old, tendency,    &
                    field(i,k-2,j), field(i,k-1,j),      &
                    field(i,k  ,j), field(i,k+1,j),  -vel )
            fqz(i,k,j) = fqz(i,k,j) - fqzl(i,k,j)
+         ENDDO
+
+         DO i = i_start, i_end
 
            k=ktf
            dz = 2./(rdzw(k)+rdzw(k-1))
@@ -7869,16 +7887,16 @@ END SUBROUTINE advect_scalar_pd
 !----------------------------------------------------------------
 
 SUBROUTINE advect_scalar_weno ( field, field_old, tendency,     &
-                             ru, rv, rom,                   &
-                             c1, c2,                        &
-                             mut, time_step, config_flags,  &
-                             msfux, msfuy, msfvx, msfvy,    &
-                             msftx, msfty,                  &
-                             fzm, fzp,                      &
-                             rdx, rdy, rdzw,                &
-                             ids, ide, jds, jde, kds, kde,  &
-                             ims, ime, jms, jme, kms, kme,  &
-                             its, ite, jts, jte, kts, kte  )
+                                ru, rv, rom,                   &
+                                c1, c2,                        &
+                                mut, time_step, config_flags,  &
+                                msfux, msfuy, msfvx, msfvy,    &
+                                msftx, msfty,                  &
+                                fzm, fzp,                      &
+                                rdx, rdy, rdzw,                &
+                                ids, ide, jds, jde, kds, kde,  &
+                                ims, ime, jms, jme, kms, kme,  &
+                                its, ite, jts, jte, kts, kte  )
 !
 ! 5th-order WENO (Weighted Essentially Non-Oscillatory) scheme adapted from COMMAS.  
 ! See Jiang and Shu, 1996, J. Comp. Phys. v. 126, 202-223;
@@ -7956,7 +7974,7 @@ SUBROUTINE advect_scalar_weno ( field, field_old, tendency,     &
     
     real               :: qim2, qim1, qi, qip1, qip2
     double precision               :: beta0, beta1, beta2, f0, f1, f2, wi0, wi1, wi2, sumwk
-    double precision, parameter    :: gi0 = 1.d0/10.d0, gi1 = 6.d0/10.d0, gi2 = 3.d0/10.d0, eps=1.0d-28
+    double precision, parameter    :: gi0 = 1.d0/10.d0, gi1 = 6.d0/10.d0, gi2 = 3.d0/10.d0, eps=1.0d-40
     integer, parameter :: pw = 2
 
 
@@ -8553,17 +8571,17 @@ END SUBROUTINE advect_scalar_weno
 !---------------------------------------------------------------------------------
 
 SUBROUTINE advect_scalar_wenopd ( field, field_old, tendency,    &
-                                ru, rv, rom,                   &
-                                c1, c2,                        &
-                                mut, mub, mu_old,              &
-                                time_step, config_flags,       &
-                                msfux, msfuy, msfvx, msfvy,    &
-                                msftx, msfty,                  &
-                                fzm, fzp,                      &
-                                rdx, rdy, rdzw, dt,            &
-                                ids, ide, jds, jde, kds, kde,  &
-                                ims, ime, jms, jme, kms, kme,  &
-                                its, ite, jts, jte, kts, kte  )
+                                  ru, rv, rom,                   &
+                                  c1, c2,                        &
+                                  mut, mub, mu_old,              &
+                                  time_step, config_flags,       &
+                                  msfux, msfuy, msfvx, msfvy,    &
+                                  msftx, msfty,                  &
+                                  fzm, fzp,                      &
+                                  rdx, rdy, rdzw, dt,            &
+                                  ids, ide, jds, jde, kds, kde,  &
+                                  ims, ime, jms, jme, kms, kme,  &
+                                  its, ite, jts, jte, kts, kte  )
 
 !  this is a first cut at a positive definite advection option
 !  for scalars in WRF.  This version is memory intensive ->
@@ -8595,8 +8613,8 @@ SUBROUTINE advect_scalar_wenopd ( field, field_old, tendency,    &
 
    REAL , DIMENSION( ims:ime , kms:kme , jms:jme ) , INTENT(IN   ) :: field,     &
                                                                       field_old, &
-                                                                      ru,    &
-                                                                      rv,    &
+                                                                      ru,        &
+                                                                      rv,        &
                                                                       rom
 
    REAL , DIMENSION( ims:ime , jms:jme ) , INTENT(IN   ) :: mut, mub, mu_old
@@ -8652,7 +8670,7 @@ SUBROUTINE advect_scalar_wenopd ( field, field_old, tendency,    &
 
     real               :: qim2, qim1, qi, qip1, qip2
     double precision               :: beta0, beta1, beta2, f0, f1, f2, wi0, wi1, wi2, sumwk
-    double precision, parameter    :: gi0 = 1.d0/10.d0, gi1 = 6.d0/10.d0, gi2 = 3.d0/10.d0, eps1=1.0d-28
+    double precision, parameter    :: gi0 = 1.d0/10.d0, gi1 = 6.d0/10.d0, gi2 = 3.d0/10.d0, eps1=1.0d-40
     integer, parameter :: pw = 2
 
 
@@ -9476,7 +9494,7 @@ END SUBROUTINE advect_scalar_wenopd
 
 SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
                                   h_tendency, z_tendency,        &
-                                  ru, rv, rom,                   &
+                                  ru, rv, rom, romI,             &
                                   c1, c2,                        &
                                   mut, mub, mu_old,              &
                                   config_flags,                  &
@@ -9512,8 +9530,9 @@ SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
 
    REAL , DIMENSION( ims:ime , kms:kme , jms:jme ) , INTENT(IN   ) :: field,     &
                                                                       field_old, &
-                                                                      ru,    &
-                                                                      rv,    &
+                                                                      ru,        &
+                                                                      rv,        &
+                                                                      romI,      &
                                                                       rom
 
    REAL , DIMENSION( ims:ime , jms:jme ) , INTENT(IN   ) :: mut, mub, mu_old
@@ -9544,7 +9563,7 @@ SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
    INTEGER :: i_start_f, i_end_f, j_start_f, j_end_f
    INTEGER :: jmin, jmax, jp, jm, imin, imax
 
-   REAL    :: mrdx, mrdy, ub, vb, uw, vw, mu
+   REAL    :: mrdx, mrdy, ub, vb, uw, vw, mu, ieva_corr
    REAL , DIMENSION(its:ite, kts:kte) :: vflux
 
 
@@ -10344,6 +10363,18 @@ SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
    DO k=kts, ktf
    DO i=i_start, i_end
 
+! ----------------------------------------------------------------------------------------------
+! IEVA
+! We need to correct for the partial divergence created by the IEVA scheme.
+! If there is no implicit vertical advection, this term == 1.0.  
+! Else, it rescales the qmax & qmin value to reflect the partial divergence present in both the
+! low-order and high-order fluxes because the VV field is partioned.
+! ----------------------------------------------------------------------------------------------
+
+     ieva_corr = (c1(k)*mut(i,j)+c2(k))+dt*msfty(i,j)*rdzw(k)*(romI(i,k+1,j)-romI(i,k,j))
+
+! ----------------------------------------------------------------------------------------------
+
      ph_upwind = ((c1(k)*mub(i,j)+c2(k))+(c1(k)*mu_old(i,j)))*field_old(i,k,j)        &
                    - dt*( msftx(i,j)*msfty(i,j)*(               &
                           rdx*(fqxl(i+1,k,j)-fqxl(i,k,j)) +     &
@@ -10358,7 +10389,8 @@ SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
                +msfty(i,j)*rdzw(k)*(  max(0.,fqz (i,k+1,j))      &
                                      -min(0.,fqz (i,k  ,j)) )   )
 
-     ph_hi = (c1(k)*mut(i,j)+c2(k))*qmax(i,k,j) - ph_upwind
+     ph_hi = ieva_corr*qmax(i,k,j) - ph_upwind
+
      IF( flux_in .gt. ph_hi ) scale_in(i,k,j) = max(0.,ph_hi/(flux_in+eps))
 
 
@@ -10369,8 +10401,9 @@ SUBROUTINE advect_scalar_mono   ( field, field_old, tendency,    &
                                       -min(0.,fqy (i,k,j  )) ) )  &
                 +msfty(i,j)*rdzw(k)*(  min(0.,fqz (i,k+1,j))      &
                                       -max(0.,fqz (i,k  ,j)) )   )
+ 
+     ph_low = ph_upwind - ieva_corr*qmin(i,k,j)
 
-     ph_low = ph_upwind - (c1(k)*mut(i,j)+c2(k))*qmin(i,k,j)
      IF( flux_out .gt. ph_low ) scale_out(i,k,j) = max(0.,ph_low/(flux_out+eps))
 
    ENDDO
@@ -10528,7 +10561,7 @@ END SUBROUTINE advect_scalar_mono
 
 !-----------------------------------------------------------
 
-#if ( defined(ADVECT_KERNEL) )
+#ifdef ADVECT_KERNEL
 
 END MODULE advection_kernel
 !================================================================
@@ -10542,24 +10575,25 @@ PROGRAM feeder
    INTEGER :: ids, ide, jds, jde, kds, kde, &
               ims, ime, jms, jme, kms, kme, &
               its, ite, jts, jte, kts, kte
-   REAL , DIMENSION( :,:,:,: ) , ALLOCATABLE :: field, &
-                                               field_old
-   REAL , DIMENSION( :,:,: ) , ALLOCATABLE :: ru, &
-                                               rv, &
-                                               rom
+   REAL , DIMENSION( :,:,:,: ) , ALLOCATABLE :: field,    &
+                                                field_old
+   REAL , DIMENSION( :,:,: ) , ALLOCATABLE ::  ru,  &
+                                               rv,  &
+                                               rom, &
+                                               romI
    REAL , DIMENSION( :,: ), ALLOCATABLE :: mut, mub, mu_old
    REAL , DIMENSION( :,:,: ), ALLOCATABLE :: tendency
    REAL , DIMENSION( :,:,: ), ALLOCATABLE :: h_tendency, z_tendency
    REAL , DIMENSION( :,: ), ALLOCATABLE :: msfux, &
-                                            msfuy, &
-                                            msfvx, &
-                                            msfvy, &
-                                            msftx, &
-                                            msfty
+                                           msfuy, &
+                                           msfvx, &
+                                           msfvy, &
+                                           msftx, &
+                                           msfty
    REAL , DIMENSION( : ), ALLOCATABLE :: fzm, &
-                                  fzp, &
-                                  rdzw, znw,dnw, rdnw, dn, rdn, &
-                                  c1, c2
+                                         fzp, &
+                                         c1, c2, &
+                                         rdzw, znw,dnw, rdnw, dn, rdn
    REAL :: rdx, &
            rdy, &
            dt
@@ -10581,6 +10615,7 @@ PROGRAM feeder
    ALLOCATE ( ru(ims:ime , kms:kme , jms:jme ) )
    ALLOCATE ( rv(ims:ime , kms:kme , jms:jme ) )
    ALLOCATE ( rom(ims:ime , kms:kme , jms:jme ) )
+   ALLOCATE ( romI(ims:ime , kms:kme , jms:jme ) )
    PRINT *,'ALLOCATE three 2d MU fields'
    PRINT *,(ime-ims+1)*(jme-jms+1)
    ALLOCATE ( mut(ims:ime , jms:jme) )
@@ -10626,8 +10661,9 @@ PROGRAM feeder
    mut = 1
    mu_old = 0
    ru = 90
-   rv = 0
-   rom = 0
+   rv = 0.
+   rom = 0.
+   romI = 0.
    msfux = 1
    msfuy = 1
    msfvx = 1
@@ -10720,62 +10756,65 @@ PROGRAM feeder
                                     ims, ime, jms, jme, kms, kme,  &
                                     its, ite, jts, jte, kts, kte  )
          ELSE IF (config_flags%scalar_adv_opt .EQ. 1 ) THEN
-            CALL advect_scalar_pd ( field(ims,kms,jms,im), &
-                                    field_old(ims,kms,jms,im), &
-                                    tendency(ims,kms,jms), &
-                                    h_tendency(ims,kms,jms), &
-                                    z_tendency(ims,kms,jms), &
-                                    ru, rv, rom, c1, c2, &
-                                    mut, mub, mu_old, &
+            CALL advect_scalar_pd ( field(ims,kms,jms,im),            &
+                                    field_old(ims,kms,jms,im),        &
+                                    tendency(ims,kms,jms),            &
+                                    h_tendency(ims,kms,jms),          &
+                                    z_tendency(ims,kms,jms),          &
+                                    ru, rv, rom, c1, c2,              &
+                                    mut, mub, mu_old,                 &
                                     time_step, config_flags, tenddec, &
-                                    msfux, msfuy, msfvx, msfvy, &
-                                    msftx, msfty, fzm, fzp, &
-                                    rdx, rdy, rdzw,dt, &
-                                    ids, ide, jds, jde, kds, kde, &
-                                    ims, ime, jms, jme, kms, kme, &
+                                    msfux, msfuy, msfvx, msfvy,       &
+                                    msftx, msfty, fzm, fzp,           &
+                                    rdx, rdy, rdzw,dt,                &
+                                    ids, ide, jds, jde, kds, kde,     &
+                                    ims, ime, jms, jme, kms, kme,     &
                                     its, ite, jts, jte, kts, kte )
          ELSE IF (config_flags%scalar_adv_opt .EQ. 2 ) THEN
-            CALL advect_scalar_mono ( field(ims,kms,jms,im), &
-                                    field_old(ims,kms,jms,im), &
-                                    tendency(ims,kms,jms), &
-                                    h_tendency(ims,kms,jms), &
-                                    z_tendency(ims,kms,jms), &
-                                    ru, rv, rom, c1, c2, &
-                                    mut, mub, mu_old, &
-                                    config_flags, tenddec, &
-                                    msfux, msfuy, msfvx, msfvy, &
-                                    msftx, msfty, fzm, fzp, &
-                                    rdx, rdy, rdzw,dt, &
-                                    ids, ide, jds, jde, kds, kde, &
-                                    ims, ime, jms, jme, kms, kme, &
-                                    its, ite, jts, jte, kts, kte )
+            CALL advect_scalar_mono ( field(ims,kms,jms,im),        &
+                                      field_old(ims,kms,jms,im),    &
+                                      tendency(ims,kms,jms),        &
+                                      h_tendency(ims,kms,jms),      &
+                                      z_tendency(ims,kms,jms),      &
+                                      ru, rv, rom, romI,            &
+                                      c1, c2,                       & 
+                                      mut, mub, mu_old,             &
+                                      config_flags, tenddec,        &
+                                      msfux, msfuy, msfvx, msfvy,   &
+                                      msftx, msfty, fzm, fzp,       &
+                                      rdx, rdy, rdzw,dt,            &
+                                      ids, ide, jds, jde, kds, kde, &
+                                      ims, ime, jms, jme, kms, kme, &
+                                      its, ite, jts, jte, kts, kte )
          ELSE IF (config_flags%scalar_adv_opt .EQ. 3 ) THEN
-            CALL advect_scalar_weno ( field(ims,kms,jms,im), &
-                                   field_old(ims,kms,jms,im), &
-                                   tendency(ims,kms,jms), &
-                             ru, rv, rom, c1, c2,           &
-                             mut, time_step, config_flags,  &
-                             msfux, msfuy, msfvx, msfvy,    &
-                             msftx, msfty,                  &
-                             fzm, fzp,                      &
-                             rdx, rdy, rdzw,                &
-                             ids, ide, jds, jde, kds, kde,  &
-                             ims, ime, jms, jme, kms, kme,  &
-                             its, ite, jts, jte, kts, kte  )
+            CALL advect_scalar_weno ( field(ims,kms,jms,im),         &
+                                      field_old(ims,kms,jms,im),     &
+                                      tendency(ims,kms,jms),         &
+                                      ru, rv, rom,                   &
+                                      c1, c2,                        & 
+                                      mut, time_step, config_flags,  &
+                                      msfux, msfuy, msfvx, msfvy,    &
+                                      msftx, msfty,                  &
+                                      fzm, fzp,                      &
+                                      rdx, rdy, rdzw,                &
+                                      ids, ide, jds, jde, kds, kde,  &
+                                      ims, ime, jms, jme, kms, kme,  &
+                                      its, ite, jts, jte, kts, kte  )
          ELSE IF (config_flags%scalar_adv_opt .EQ. 4 ) THEN
-            CALL advect_scalar_wenopd ( field(ims,kms,jms,im), &
-                                        field_old(ims,kms,jms,im), &
-                                        tendency(ims,kms,jms), &
-                                ru, rv, rom, c1, c2,           &
-                                mut, mub, mu_old,              &
-                                time_step, config_flags,       &
-                                msfux, msfuy, msfvx, msfvy,    &
-                                msftx, msfty,                  &
-                                fzm, fzp,                      &
-                                rdx, rdy, rdzw, dt,            &
-                                ids, ide, jds, jde, kds, kde,  &
-                                ims, ime, jms, jme, kms, kme,  &
-                                its, ite, jts, jte, kts, kte  )
+            CALL advect_scalar_wenopd ( field(ims,kms,jms,im),         &
+                                        field_old(ims,kms,jms,im),     &
+                                        tendency(ims,kms,jms),         &
+                                        ru, rv, rom,                   &
+                                        c1, c2,                        & 
+                                        mut, mub, mu_old,              &
+                                        time_step, config_flags,       &
+                                        msfux, msfuy, msfvx, msfvy,    &
+                                        msftx, msfty,                  &
+                                        fzm, fzp,                      &
+                                        rdx, rdy, rdzw, dt,            &
+                                        ids, ide, jds, jde, kds, kde,  &
+                                        ims, ime, jms, jme, kms, kme,  &
+                                        its, ite, jts, jte, kts, kte  )
          END IF
          DO n = 1 , MAX_SCALARS
             field(:,:,:,n) = field_old(:,:,:,n) + dt * ( tendency(:,:,:) )
@@ -10830,7 +10869,7 @@ PROGRAM feeder
 
 END PROGRAM feeder
 #endif
-#if ( !defined(ADVECT_KERNEL) )
+#ifndef ADVECT_KERNEL
 
 !---------------------------------------------------------------------------------
 
@@ -11395,8 +11434,8 @@ SUBROUTINE advect_weno_u ( u, u_old, tendency,            &
 
    IF ( config_flags%open_ys .or. specified ) i_start = MAX(ids+1,its)
    IF ( config_flags%open_ye .or. specified ) i_end   = MIN(ide-1,ite)
-      IF ( config_flags%periodic_x ) i_start = its
-      IF ( config_flags%periodic_x ) i_end = ite
+   IF ( config_flags%periodic_x ) i_start = its
+   IF ( config_flags%periodic_x ) i_end = ite
 
    DO i = i_start, i_end
      vflux(i,kts)=0.
@@ -12076,20 +12115,20 @@ SUBROUTINE advect_weno_v   ( v, v_old, tendency,            &
 !     we can do this using *(my/mx) (see eqn. 45 for example)
 
 
-      i_start = its
-      i_end   = MIN(ite,ide-1)
-      j_start = jts
-      j_end   = jte
+    i_start = its
+    i_end   = MIN(ite,ide-1)
+    j_start = jts
+    j_end   = jte
 
-      DO i = i_start, i_end
-         vflux(i,kts)=0.
-         vflux(i,kte)=0.
-      ENDDO
+    DO i = i_start, i_end
+       vflux(i,kts)=0.
+       vflux(i,kte)=0.
+    ENDDO
 
-      ! Polar boundary conditions are like open or specified
-      ! We don't want to calculate vertical v tendencies at the N or S pole
-      IF ( config_flags%open_ys .or. specified .or. config_flags%polar ) j_start = MAX(jds+1,jts)
-      IF ( config_flags%open_ye .or. specified .or. config_flags%polar ) j_end   = MIN(jde-1,jte)
+    ! Polar boundary conditions are like open or specified
+    ! We don't want to calculate vertical v tendencies at the N or S pole
+    IF ( config_flags%open_ys .or. specified .or. config_flags%polar ) j_start = MAX(jds+1,jts)
+    IF ( config_flags%open_ye .or. specified .or. config_flags%polar ) j_end   = MIN(jde-1,jte)
 
 !    vert_order_test : IF (vert_order == 6) THEN    
 
@@ -12520,14 +12559,14 @@ SUBROUTINE advect_weno_w    ( w, w_old, tendency,            &
         ! (latitudes are as for u grid, longitudes are displaced)
         ! Therefore: flow is only from one side for points next to poles
         IF ( config_flags%polar .AND. (j == jds+1) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) - mrdy*fqy(i,k,jp1)
           END DO
           END DO
         ELSE IF( config_flags%polar .AND. (j == jde) ) THEN
-          DO k=kts,ktf
+          DO k=kts+1,ktf+1
           DO i = i_start, i_end
             mrdy=msftx(i,j-1)*rdy    ! see ADT eqn 46 dividing by my, 2nd term RHS
             tendency(i,k,j-1) = tendency(i,k,j-1) + mrdy*fqy(i,k,jp0)

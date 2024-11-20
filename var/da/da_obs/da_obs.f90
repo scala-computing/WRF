@@ -1,10 +1,17 @@
 module da_obs
 
    use da_define_structures, only : multi_level_type, y_type, iv_type, infa_type, &
+#if (WRF_CHEM == 1)
+      da_allocate_y_chem_sfc, da_deallocate_y_chem_sfc, &
+#endif
       field_type, each_level_type,da_allocate_y, da_random_seed,da_allocate_y_rain, &
-      da_allocate_y_radar
+      da_allocate_y_radar, da_allocate_y_lightning
+#if (WRF_CHEM == 1)
+   use module_domain, only : domain, x_type, xchem_type
+   use da_chem_sfc, only : da_transform_xtoy_chem_sfc, da_transform_xtoy_chem_sfc_adj
+#else
    use module_domain, only : domain, x_type
-
+#endif
    use da_airep, only : da_transform_xtoy_airep, da_transform_xtoy_airep_adj 
    use da_airsr, only : da_transform_xtoy_airsr, da_transform_xtoy_airsr_adj 
    use da_bogus, only : da_transform_xtoy_bogus, da_transform_xtoy_bogus_adj
@@ -21,13 +28,20 @@ module da_obs
       rtm_option_crtm,use_rad, base_temp, base_lapse, base_pres, &
       ob_format,ob_format_ascii,filename_len, trace_use_dull, &
       sound, mtgirs, synop, profiler, gpsref, gpseph, gpspw, polaramv, geoamv, ships, metar, &
-      satem, radar, ssmi_rv, ssmi_tb, ssmt1, ssmt2, airsr, pilot, airep, sonde_sfc,rain, &
+      satem, radar, ssmi_rv, ssmi_tb, ssmt1, ssmt2, airsr, pilot, airep, sonde_sfc, rain, lightning, &
       bogus, buoy, qscat, tamdar, tamdar_sfc, pseudo, num_ob_indexes, its,ite,jds,jts,jte,ids, &
+#if (WRF_CHEM == 1)
+      chemic_surf, &
+#endif
       write_mod_filtered_obs, radiance, use_varbc, obs_names, q_error_options,radar_rf_rscl,radar_rv_rscl, kts,kte,kds,kde, &
       use_gpsephobs
    ! use_crtm_kmatrix,use_crtm_kmatrix_fast
    use da_control, only : pseudo_tpw, pseudo_ztd, pseudo_ref, pseudo_uvtpq
    use da_define_structures, only : da_allocate_obs_info
+#if (WRF_CHEM == 1)
+   use module_state_description, only : num_chemic_surf, PARAM_FIRST_SCALAR
+#endif
+
 #ifdef CRTM
    use da_crtm, only : da_transform_xtoy_crtm, da_transform_xtoy_crtm_adj
       !da_transform_xtoy_crtmk,da_transform_xtoy_crtmk_adj
@@ -48,6 +62,7 @@ module da_obs
    use da_qscat,     only : da_transform_xtoy_qscat,da_transform_xtoy_qscat_adj
    use da_radar,     only : da_transform_xtoy_radar,da_transform_xtoy_radar_adj
    use da_rain,      only : da_transform_xtoy_rain,da_transform_xtoy_rain_adj
+   use da_lightning, only : da_transform_xtoy_lightning,da_transform_xtoy_lightning_adj
    use da_reporting, only : da_error, message, da_warning, da_message
 #ifdef RTTOV
    use da_rttov,     only : da_transform_xtoy_rttov,da_transform_xtoy_rttov_adj
@@ -55,9 +70,9 @@ module da_obs
    use da_satem,     only : da_transform_xtoy_satem, da_transform_xtoy_satem_adj
    use da_ships,     only : da_transform_xtoy_ships, da_transform_xtoy_ships_adj
    use da_sound,     only : da_transform_xtoy_sound, da_transform_xtoy_sonde_sfc, &
-      da_transform_xtoy_sound_adj, da_transform_xtoy_sonde_sfc_adj
+                            da_transform_xtoy_sound_adj, da_transform_xtoy_sonde_sfc_adj
    use da_mtgirs,    only : da_transform_xtoy_mtgirs, da_transform_xtoy_mtgirs_adj
-  use da_tamdar,    only : da_transform_xtoy_tamdar, da_transform_xtoy_tamdar_adj, &
+   use da_tamdar,    only : da_transform_xtoy_tamdar, da_transform_xtoy_tamdar_adj, &
                             da_transform_xtoy_tamdar_sfc, da_transform_xtoy_tamdar_sfc_adj
    use da_ssmi,      only : da_transform_xtoy_ssmt1, da_transform_xtoy_ssmt2, &
       da_transform_xtoy_ssmi_tb, da_transform_xtoy_ssmi_rv, &
@@ -82,6 +97,10 @@ contains
 #include "da_fill_obs_structures.inc"
 #include "da_fill_obs_structures_radar.inc"
 #include "da_fill_obs_structures_rain.inc"
+#include "da_fill_obs_structures_lightning.inc"
+#if (WRF_CHEM == 1)
+#include "da_fill_obs_structures_chem_sfc.inc"
+#endif
 #include "da_random_omb_all.inc"
 #include "da_store_obs_grid_info.inc"
 #include "da_store_obs_grid_info_rad.inc"

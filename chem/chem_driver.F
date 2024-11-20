@@ -46,8 +46,9 @@
 #if (defined(CHEM_DBG_I) && defined(CHEM_DBG_J) && defined(CHEM_DBG_K))
                                      chem_dbg,      &
 #endif
-                                     get_last_gas,mozcart_lbc_set, &
+                                     mozcart_lbc_set, &
                                      bdy_chem_value_top_pv,PVS
+  USE module_chem_share,      only: get_last_gas
   USE module_upper_bc_driver, only: upper_bc_driver
   USE module_tropopause,      only: tropopause_driver
   USE modal_aero_data, only: ntot_amode_cam_mam => ntot_amode
@@ -281,6 +282,8 @@
       CHARACTER (LEN=1000) :: msg 
       CHARACTER (LEN=256) :: current_date_char 
       integer :: current_month
+!for the online nh3-"WRF-NH3-CHEM" modified by renchuanhua 
+      integer :: current_hour  
 ! ..
 ! .. Intrinsic Functions ..
       INTRINSIC max, min
@@ -805,9 +808,10 @@
 
 
 !--- emissions
+!  MEGAN2_CLM uses driver below even if other flags are zero.  BJG 5/29/2019
 
     if(config_flags%emiss_inpt_opt > 0 .or. config_flags%dust_opt > 0  &
-       .or. config_flags%tracer_opt > 0  )then
+       .or. config_flags%tracer_opt > 0 .or. config_flags%bio_emiss_opt == MEGAN2_CLM ) then
       call wrf_debug(15,'calling emissions driver')
 
       call emissions_driver(grid%id,ktau,grid%dt,grid%DX,                                  &
@@ -875,10 +879,15 @@
               grid%potevp,grid%SFCEVP,grid%LU_INDEX,                                       &
               grid%biomt_par,grid%emit_par,grid%ebio_co2oce,                               &
               eghg_bio,                                                                    &
-              grid%dust_flux, grid%seas_flux,                                              &
+              grid%seas_flux,                                                              &
+         ! stuff for the online nh3-"WRF-NH3-CHEM" modified by renchuanhua
+              grid%actnh3, grid%EFnh3,                                                     &          
+              grid%agrisoil_nh3, grid%fertilizer_nh3, grid%freeinten_nh3,                  &
+              grid%graze_nh3, grid%industry_nh3,                                           &
+              grid%residential_nh3,  grid%transport_nh3, current_hour, grid%Q2,            &
               ids,ide, jds,jde, kds,kde,                                                   &
               ims,ime, jms,jme, kms,kme,                                                   &
-              its,ite,jts,jte,kts,kte)
+              its,ite,jts,jte,kts,kte                                                      )
               if( chm_is_mozart ) then
                  call mozcart_lbc_set( chem, num_chem, grid%id, &
                                        ims, ime, jms, jme, kms, kme,    &                  
@@ -898,7 +907,7 @@
                config_flags%kemit                                                     )
        end if
 #endif 
-     endif
+    endif
 
 !
 ! calculate aerosol optical properities
@@ -958,6 +967,7 @@
               chem,rho,dz8w,grid%xlat,grid%xlong,                                     &
               zmid,z_at_w,                                                            &
               grid%qc_cu,grid%qi_cu,                                                  &
+              grid%qc_bl,grid%qi_bl,                                                  &
               grid%ph_macr,grid%ph_o31d,grid%ph_o33p,grid%ph_no2,                     &
               grid%ph_clno2,                                                          &
               grid%ph_no3o2,                                                          &
@@ -983,6 +993,7 @@
               grid%bscoef1,grid%bscoef2,grid%bscoef3,grid%bscoef4,                    &
               grid%l2aer,grid%l3aer,grid%l4aer,grid%l5aer,grid%l6aer,grid%l7aer,      &
               grid%pm2_5_dry,grid%pm2_5_water,grid%uvrad,grid%ivgtyp,                 &
+              grid%o3_gfs_du,                                                         &
               ids,ide, jds,jde, kds,kde,                                              &
               ims,ime, jms,jme, kms,kme,                                              &
               its,ite,jts,jte,kts,kte)
@@ -1132,7 +1143,8 @@
 !
 !
       if( config_flags%cu_physics>0 .and. config_flags%chem_conv_tr>0 &
-           .and. config_flags%cu_physics/=kfcupscheme ) then            !BSINGH - For WRFCuP scheme
+           .and. config_flags%cu_physics/=kfcupscheme                 &
+           .and. config_flags%cu_physics/=gfscheme ) then                !BSINGH - For WRFCuP scheme
         call wrf_debug(15,'calling conv transport for chemical species')
         if(config_flags%chem_opt >0 )then
         ! save old concentrations for convective tendencies
@@ -1548,6 +1560,7 @@ if ( cam_mam_aerosols ) &
                grid%f_ice_phy,grid%f_rain_phy,grid%cldfrai, grid%cldfral,             &
                moist, grid%cldfra, grid%cldfra_mp_all, grid%ph_no2,                   &
                chem, gas_aqfrac, numgas_mam,grid%is_CAMMGMP_used,                     &
+               grid%ph_cw,                                                            &
                ids,ide, jds,jde, kds,kde,                                             &
                ims,ime, jms,jme, kms,kme,                                             &
                its,ite, jts,jte, kts,kte                                              )
@@ -1572,6 +1585,7 @@ if ( cam_mam_aerosols ) &
               vdrog3,vdrog3_vbs,grid%br_rto,grid%dgnum4d,grid%dgnumwet4d,wetdens_ap,  &
               del_h2so4_gasprod,grid%dvmrdt_sv13d,grid%dvmrcwdt_sv13d,                &
               grid%is_CAMMGMP_used,                                                   &
+              grid%ph_aer01, grid%ph_aer02, grid%ph_aer03, grid%ph_aer04,             &
               ids,ide, jds,jde, kds,kde,                                              &
               ims,ime, jms,jme, kms,kme,                                              &
               its,ite,jts,jte,kts,kte                                                 )
@@ -1606,9 +1620,11 @@ if ( cam_mam_aerosols ) &
               rri,t_phy,moist,p8w,t8w,                                                &
               grid%dx, grid%dy,                                                       &
               p_phy,chem,rho,grid%cldfra,grid%cldfra2,                                &
-              grid%rainprod,grid%evapprod,grid%hno3_col_mdel,                         &
+              wetscav_frcing(ims,kms,jms,p_rainprod),                                 &
+              wetscav_frcing(ims,kms,jms,p_evapprod),                                 &
+              grid%hno3_col_mdel,                                                     &                
               grid%qlsink,grid%precr,grid%preci,grid%precs,grid%precg,                &
-              grid%wdflx, &
+              grid%wdflx,                                                             &
               gas_aqfrac, numgas_mam,dz8w,                                            &
               grid%h2oaj,grid%h2oai,grid%nu3,grid%ac3,grid%cor3,                      &
               grid%asulf,grid%ahno3,grid%anh3,grid%cvaro1,grid%cvaro2,                &

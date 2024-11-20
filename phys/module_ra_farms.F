@@ -26,7 +26,6 @@
     real, parameter :: DE_ICE_MIN = 5.0, DE_ICE_MAX = 140.0
     real, parameter :: DE_CLOUD_MIN = 5.0, DE_CLOUD_MAX = 120.0
     real, parameter :: TAU_MIN = 0.0001, TAU_MAX = 300.0
-    real, parameter :: AOD550_VAL = 0.12, ANGEXP_VAL = 1.3, AERSSA_VAL = 0.85, AERASY_VAL = 0.9
     real, parameter :: RE_CLOUD_CLIM = 8.E-6, RE_ICE_CLIM = 24.E-6, RE_SNOW_CLIM = 24.E-6
 
   contains
@@ -182,18 +181,6 @@
                tau_qs = 0.0
              end if
 
-               ! Aerosols
-             if (aer_opt == 1) then
-                angexp2d(i, j) = ANGEXP_VAL
-                aerssa2d(i, j) = AERSSA_VAL
-                aerasy2d(i, j) = AERASY_VAL
-             else if (aer_opt == 0) then
-                aod5502d(i, j) = 0.0
-                angexp2d(i, j) = 0.0
-                aerssa2d(i, j) = 0.0
-                aerasy2d(i, j) = 0.0
-             end if
-
              beta = aod5502d(i, j) * (1000.0/ 550.0) ** (- angexp2d(i, j))
 
              Call Farms (p8w(i, 1, j), albedo(i, j), aerssa2d(i, j),         &
@@ -347,7 +334,7 @@
       if (tau_qv > TAU_MIN) then
         Call Watermodel (tau_tot, de_cloud2, solarangle, Tducld_water, Ruucld_water)
       else
-        Tducld_water = 1.0
+        Tducld_water = 0.0
         Ruucld_water = 0.0
         tau_qv2 = 0.0
       end if
@@ -356,7 +343,7 @@
       if (tau_qi > TAU_MIN) then
         call Icemodel (tau_tot, de_ice2, solarangle, Tducld_ice, Ruucld_ice)
       else
-        Tducld_ice = 1.0
+        Tducld_ice = 0.0
         Ruucld_ice = 0.0
         tau_qi2 = 0.0
       end if
@@ -365,7 +352,7 @@
       if (tau_qs > TAU_MIN) then
         call Icemodel (tau_tot, de_snow2, solarangle, Tducld_snow, Ruucld_snow)
       else
-        Tducld_snow = 1.0
+        Tducld_snow = 0.0
         Ruucld_snow = 0.0
         tau_qs2 = 0.0
       end if
@@ -378,6 +365,9 @@
         Ruucld = (tau_qv2 * Ruucld_water + tau_qi2 * Ruucld_ice + tau_qs2 * Ruucld_snow)  / tau_tot
         Ruucld = min(Ruucld, 1.0) 
         Ruucld = max(Ruucld, 0.0) 
+      else
+        Tducld = 0.0
+        Ruucld = 0.0
       end if
 
       tau = tau_qv2 + tau_qi2 + tau_qs2 
@@ -604,8 +594,8 @@
       endif
       if ( De .gt. 26.0 ) then 
         Ptau =  (2.8355 + (100.0-De)*0.006)*solarangle - 0.00612
-        Ptau = max(Ptau, PTAU_MIN)
       endif
+      Ptau = max(Ptau, PTAU_MIN)
 
       PDHI = 1047.6367*solarangle**1.0883
 

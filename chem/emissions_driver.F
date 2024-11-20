@@ -5,6 +5,9 @@
 !                   Saulo Freitas (CPTEC), and Georg Grell
 !
 !
+! A. Ukhov, 11 March 2021, remove unused parameters in gocart_dust_driver(),
+! gocart_dust_afwa_driver(), and uoc_dust_driver() subroutines.
+
 MODULE module_emissions_driver
    IMPLICIT NONE
 CONTAINS
@@ -67,10 +70,15 @@ CONTAINS
          ! stuff for aircraft emissions
          emis_aircraft,                                                    &
          ! stuff for GHG fluxes
-         vprm_in,rad_vprm,lambda_vprm,alpha_vprm,resp_vprm,               &
+         vprm_in,rad_vprm,lambda_vprm,alpha_vprm,resp_vprm,                &
          xtime,tslb,wet_in,rainc,rainnc,potevp,sfcevp,lu_index,            &
          biomt_par,emit_par,ebio_co2oce,eghg_bio,                          &
-         dust_flux, seas_flux,                                             &
+         seas_flux,                                                        &
+         ! stuff for online nh3 "WRF-NH3-CHEM" modified by renchuanhua
+         actnh3,EFnh3,                                                     &
+         agrisoil_nh3, fertilizer_nh3, freeinten_nh3, graze_nh3,           &
+         industry_nh3, residential_nh3,                                    &
+         transport_nh3, current_hour, Q2,                                  &         
          ids,ide, jds,jde, kds,kde,                                        &
          ims,ime, jms,jme, kms,kme,                                        &
          its,ite, jts,jte, kts,kte                                         )
@@ -101,6 +109,9 @@ CONTAINS
   USE module_ghg_fluxes
   USE module_lightning_nox_driver
   USE module_cam_mam_addemiss, only: cam_mam_addemiss
+#if( WRF_USE_CLM == 1)
+  USE shr_megan_mod, only : shr_megan_mechcomps_n, shr_megan_mechcomps
+#endif
   
   IMPLICIT NONE
 
@@ -125,7 +136,7 @@ CONTAINS
    REAL, DIMENSION( ims:ime, jms:jme, ne_area ),                           &
          INTENT(INOUT ) ::                               e_bio
    REAL, DIMENSION( ims:ime, 1:config_flags%kemit, jms:jme,num_emis_ant),&
-         INTENT(IN ) ::                                                    &
+         INTENT(INOUT ) ::                                                    &
          emis_ant
    REAL, DIMENSION( ims:ime,  kms:kme, jms:jme,num_emis_vol),              &
          INTENT(INOUT ) ::                                                 &
@@ -284,7 +295,7 @@ CONTAINS
 
    real, dimension (ims:ime, jms:jme ) ,                               &
         intent(in) ::                                                  &
-        T2, swdown
+        T2, swdown, Q2  ! modifed by renchuanhua
 
    integer, intent(in) :: current_month
 
@@ -318,7 +329,7 @@ CONTAINS
       REAL, DIMENSION(ims:ime, 8, jms:jme, num_vprm_in), INTENT(IN)     ::  vprm_in
       REAL, DIMENSION(ims:ime, 1,jms:jme, num_eghg_bio), INTENT(INOUT ) ::  eghg_bio
 
-      REAL, DIMENSION(ims:ime, jms:jme), INTENT(OUT)   :: dust_flux, seas_flux
+      REAL, DIMENSION(ims:ime, jms:jme), INTENT(OUT)   :: seas_flux
 ! CO2
       REAL, DIMENSION(8) :: rad_vprm,lambda_vprm,alpha_vprm,resp_vprm
 ! CH4
@@ -330,11 +341,60 @@ CONTAINS
      REAL, DIMENSION( ims:ime,          jms:jme ),           INTENT(IN   ) :: ht, ic_flashrate, cg_flashrate
      REAL, DIMENSION( ims:ime, kms:kme, jms:jme ),           INTENT(IN   ) :: refl_10cm
 ! end stuff for lightning NOx
-!
+
+! stuff for online NH3  "WRF-NH3-CHEM" modified by renchuanhua
+     REAL, DIMENSION( ims:ime,12,jms:jme ), OPTIONAL,  INTENT(IN   ) :: actnh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: EFnh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: agrisoil_nh3
+     REAL, DIMENSION( ims:ime,12,jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: fertilizer_nh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: freeinten_nh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: graze_nh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: industry_nh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: residential_nh3
+     REAL, DIMENSION( ims:ime,   jms:jme ), OPTIONAL,  INTENT(INOUT   ) :: transport_nh3
+     INTEGER, INTENT(IN   ) ::       current_hour
+
+
+     ! local variables
+     real,parameter :: EFstd =5.5
+     real :: CFwind,CFtemp,CFsmois_hus,CFrain  
+     integer :: h 
+     real, dimension (ims:ime, jms:jme ) ::   frin_house, frin_sManure,frin_manureStore  !renchuanhua
+     real, dimension (ims:ime, jms:jme ) ::   graze_house, graze_out 
+     real, dimension (ims:ime, jms:jme ) ::   CFsmois
+     real, dimension (ims:ime, jms:jme ) ::   T_house, V_house, GF_Thouse
+     real, parameter :: Factor_fihouse=0.156, Factor_sManure=0.774, Factor_manureStore=0.07 
+     real, parameter :: Factor_grhouse=0.226     
+
+     real, dimension (ims:ime, jms:jme ) ::   house, store ,outsoil
+     real, dimension (ims:ime, jms:jme ) ::   emis_house, emis_store ,emis_fert
+
+real, save :: freq_residential(24) = &
+                          (/0.0110, 0.0030, 0.0010, 0.0000, 0.0020, 0.0169, &
+                            0.0914, 0.2111, 0.1402, 0.0905, 0.0676, 0.0487, &
+                            0.0179, 0.0358, 0.0258, 0.0182, 0.0272, 0.0222, &
+                            0.0411, 0.0401, 0.0268, 0.0202, 0.0212, 0.0202/)
+real, save :: freq_transport(24)   = &
+              (/0.02, 0.01, 0.01, 0.00, 0.00, 0.00, &
+                0.01, 0.03, 0.06, 0.06, 0.06, 0.05, &
+                0.06, 0.06, 0.06, 0.07, 0.07, 0.08, &
+                0.08, 0.07, 0.05, 0.04, 0.03, 0.02/)
+real, save :: freq_industry(24)    = &
+              (/0.02, 0.01, 0.01, 0.00, 0.00, 0.00, &
+                0.01, 0.03, 0.06, 0.06, 0.06, 0.05, &
+                0.06, 0.06, 0.06, 0.07, 0.07, 0.08, &
+                0.08, 0.07, 0.05, 0.04, 0.03, 0.02/)
+
+! end stuff online NH3  
+
+
 ! Local variables...
 !
-      INTEGER :: begday,endday,i, j, k, ksub, dust_emiss_active, seasalt_emiss_active,emiss_ash_hgt
+      INTEGER :: begday,endday,i, j, k, m, p_in_chem, ksub, dust_emiss_active, seasalt_emiss_active,emiss_ash_hgt
       REAL :: conv,conv3,conv4,oconv3,oconv4
+#if( WRF_USE_CLM == 1)
+      REAL :: convert2(its:ite,jts:jte)
+#endif
       CHARACTER (LEN=80) :: message
       LOGICAL :: do_bioemiss, do_plumerisefire,do_ex_volcanoe
 
@@ -715,18 +775,18 @@ CONTAINS
       dust_select:  SELECT CASE(config_flags%dust_opt)
       CASE (DUSTGOCART)
         CALL wrf_debug(15,'Gocart dust emissions')
-        call gocart_dust_driver(ktau,dtstep,config_flags,julday,alt,t_phy,moist,u_phy,  &
-         v_phy,chem,rho_phy,dz8w,smois,u10,v10,p8w,erod,dustin,           &
-         ivgtyp,isltyp,vegfra,xland,xlat,xlong,gsw,dx,g,emis_dust,        &
+        call gocart_dust_driver(dtstep,config_flags,alt,t_phy,u_phy,  &
+         v_phy,chem,rho_phy,dz8w,smois,u10,v10,erod,dustin,           &
+         isltyp,xland,g,emis_dust,        &
          ids,ide, jds,jde, kds,kde,                                        &
          ims,ime, jms,jme, kms,kme,                                        &
          its,ite, jts,jte, kts,kte                                         )
       CASE (DUSTGOCARTAFWA)
         CALL wrf_debug(15,'AFWA modified Gocart dust emissions')
-        call gocart_dust_afwa_driver(ktau,dtstep,config_flags,julday,alt,t_phy,moist,u_phy,  &
-         v_phy,chem,rho_phy,dz8w,smois,u10,v10,p8w,erod,erod_dri,dustin,snowh,zs,   &
-         ivgtyp,isltyp,vegfra,lai_vegmask,xland,xlat,xlong,gsw,dx,g,emis_dust,      &
-         ust,znt,clayfrac,sandfrac,clayfrac_nga,sandfrac_nga,afwa_dustloft,         &!EDH
+        call gocart_dust_afwa_driver(dtstep,config_flags,alt,             &
+         chem,rho_phy,smois,u10,v10,dz8w,erod,erod_dri,dustin,snowh,      &
+         isltyp,vegfra,lai_vegmask,xland,g,emis_dust,                     &
+         ust,znt,clayfrac,sandfrac,clayfrac_nga,sandfrac_nga,afwa_dustloft,&!EDH
          tot_dust,tot_edust,vis_dust,dust_alpha,dust_gamma,dust_smtune,dust_ustune, &
          ids,ide, jds,jde, kds,kde,                                        &
          ims,ime, jms,jme, kms,kme,                                        &
@@ -744,7 +804,7 @@ CONTAINS
        CASE DEFAULT
         imod = 2
        END SELECT scheme_select
-       call uoc_dust_driver (ktau,dtstep,config_flags,                     &
+       call uoc_dust_driver (dtstep,config_flags,                     &
          chem,rho_phy,dz8w,smois,ust, isltyp,vegfra,g,emis_dust,           &
          ust_t, imod, rough_cor, smois_cor, soil_top_cat, erod,            &
          ids,ide, jds,jde, kds,kde,                                        &
@@ -878,6 +938,60 @@ CONTAINS
                ims,ime, jms,jme, kms,kme,                              &
                its,ite, jts,jte, kts,kte                               )
        endif
+#if( WRF_USE_CLM == 1)
+     CASE (MEGAN2_CLM)
+!...conversion factor from ppm m min-1 to mol km-2 hr-1
+!...(e_bio is in units of ppm m min-1)
+       convert2(its:ite,jts:jte) = rho_phy(its:ite,kts,jts:jte)*60./.02897
+       do m = 1,shr_megan_mechcomps_n
+         p_in_chem = shr_megan_mechcomps(m)%index
+         IF ( p_in_chem+1 == p_isoprene ) THEN
+           ebio_iso(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_no ) THEN
+           ebio_no(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_no2 ) THEN
+           ebio_no2(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_co ) THEN
+           ebio_co(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_hcho ) THEN
+           ebio_hcho(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_ald ) THEN
+           ebio_ald(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_acet ) THEN
+           ebio_acet(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_tol ) THEN
+           ebio_tol(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c10h16 ) THEN
+           ebio_c10h16(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_so2 ) THEN
+           ebio_so2(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_dms ) THEN
+           ebio_dms(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_bigalk ) THEN
+           ebio_bigalk(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_bigene ) THEN
+           ebio_bigene(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_nh3 ) THEN
+           ebio_nh3(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_ch3oh ) THEN
+           ebio_ch3oh(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c2h5oh ) THEN
+           ebio_c2h5oh(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_ch3co2h ) THEN
+           ebio_ch3cooh(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_mek ) THEN
+           ebio_mek(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c2h4 ) THEN
+           ebio_c2h4(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c2h6 ) THEN
+           ebio_c2h6(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c3h6 ) THEN
+           ebio_c3h6(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ELSEIF ( p_in_chem+1 == p_c3h8 ) THEN
+           ebio_c3h8(its:ite,jts:jte) = e_bio(its:ite,jts:jte,p_in_chem)*convert2(its:ite,jts:jte)
+         ENDIF
+       end do
+#endif
 
      CASE DEFAULT 
        if( do_bioemiss ) &
@@ -888,6 +1002,76 @@ CONTAINS
     END SELECT bioem_select
 
 !!! **************** END BIOGENICS, ADD EMISSIONS FOR VARIOUS PACKAGES
+
+
+!!! online nh3 "WRF-NH3-CHEM" modified by renchuanhua
+
+ if( config_flags%nh3emis_opt == ONLINE) then      
+  emis_ant(ims:ime , config_flags%kemit , jms:jme, p_e_nh3)=0.0
+
+  frin_house         =  freeinten_nh3*Factor_fihouse      ! house [in]
+  frin_sManure       =  freeinten_nh3*Factor_sManure      ! manure - field [out]
+  frin_manureStore   =  freeinten_nh3*Factor_manureStore  ! manure - store [none]
+  graze_house        =  graze_nh3*Factor_grhouse          ! graze [in]
+  graze_out          =  graze_nh3*(1.0-Factor_grhouse)    ! graze [out]
+
+  GF_Thouse =1.0
+
+! Animal house temperature and wind speed
+  where( T2.LT.273.15)
+    T_house = 287.15 + 0.5*(T2-(273.15+0))
+    V_house = 0.2
+  elsewhere(T2 .GE. 273.15 .and. T2 .LT. 285.65)
+    T_house = 287.15
+    V_house = 0.2 + T2*(0.405/12.5)
+  elsewhere(T2 .GE. 285.65) 
+    T_house = 287.15 + 1.4*(T2-(285.65))
+    V_house = 0.405  !0.5*(0.38+0.43)
+  end where
+    
+!  out field soil moisture correction factor
+  where( smois(:,1,:).LT.0.45)
+    CFsmois = 0.45*exp(-1.0*smois(:,1,:))+0.55
+  elsewhere(smois(:,1,:).GE.0.45)
+    CFsmois = 0.45*exp(smois(:,1,:))+0.6
+  end where
+
+
+     do j=jts,jte  
+     do i=its,ite  
+    
+
+     CFwind  =exp(0.0419*(u10(i,j)*u10(i,j)+v10(i,j)*v10(i,j))**0.5)
+     CFtemp  = (exp(0.093*(tsk(i,j)-T2(i,j))-0.57))*exp(0.018*(tsk(i,j)-273.15))
+     CFrain = 1/(3.2*rainnc(i,j)+1.0)
+     EFnh3(i,j)=CFsmois(i,j)*CFtemp*CFrain*CFwind
+
+     CFsmois_hus = 0.45*exp(-1.0*smois(i,1,j))+0.55
+     GF_Thouse  =exp((0.093*(T_house(i,j)-tsk(i,j)))-0.57)*exp(0.018*(tsk(i,j)-273.15))  
+
+ ! for house 
+     emis_house(i,j) = CFsmois_hus*GF_Thouse(i,j)*exp(0.0419*V_house(i,j))*(frin_house(i,j) + graze_house(i,j))        
+ ! for store
+     emis_store(i,j) = frin_manureStore(i,j)
+ ! for outside soil
+     emis_fert(i,j)  = EFnh3(i,j)*(fertilizer_nh3(i,current_month,j)+frin_sManure(i,j)+ graze_out(i,j)+agrisoil_nh3(i,j))
+
+
+! fertilizer and freeinten .... units is kg/km2/month
+! conv is used to change units from "mole/km2/hr" to "delta ppmv"
+  conv = 4.828e-4/rho_phy(i,1,j)*dtstep/(dz8w(i,1,j)*60.)
+        h=MOD(current_hour+8,24)   !range 0-23
+
+  emis_ant(i,1,j,p_e_nh3)=1000.0/(17.0*30.0*24.0)*(emis_house(i,j)+emis_store(i,j)+emis_fert(i,j))  &
+                  + freq_residential(h+1)*residential_nh3(i,j)*1000.0/(30.0*17.0)   &
+                  + freq_industry(h+1)   *industry_nh3(i,j)*1000.0/(30.0*17.0)   &
+                  + freq_transport(h+1)  *transport_nh3(i,j)*1000.0/(30.0*17.0)   
+    enddo
+    enddo
+                   
+ end if 
+
+
 !
     gas_addemiss_select: SELECT CASE(config_flags%chem_opt)
     CASE (RADM2, RADM2_KPP, RADM2SORG, RADM2SORG_AQ, RADM2SORG_AQCHEM, RADM2SORG_KPP, &
@@ -1522,9 +1706,9 @@ CONTAINS
             config_flags, chem, slai, ust, smois, ivgtyp, isltyp,        &
             emis_ant,ebu,config_flags%biomass_burn_opt,                  &
             config_flags%dust_opt,                                       &
-            ktau,p8w,u_phy,v_phy,rho_phy,g,dx,erod,                      &
+            ktau,u_phy,v_phy,rho_phy,g,dx,erod,                          &
             dust_emiss_active, seasalt_emiss_active,                     &
-            dust_flux, seas_flux,                                        &
+            seas_flux,emis_dust,                                         &
             ids,ide, jds,jde, kds,kde,                                   &
             ims,ime, jms,jme, kms,kme,                                   &
             its,ite, jts,jte, kts,kte                                    )

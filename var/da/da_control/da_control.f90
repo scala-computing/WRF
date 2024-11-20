@@ -6,6 +6,7 @@ module da_control
 
    use module_driver_constants, only : max_domains, max_eta, max_moves, max_bogus, &
                                        max_outer_iterations, max_instruments, max_plevs, &
+                                       max_zlevs, &
                                        max_ocean, num_ob_indexes
 
    implicit none
@@ -239,6 +240,7 @@ module da_control
    real, parameter    :: typical_rv_rms = 1.0    ! m/s
    real, parameter    :: typical_rf_rms = 1.0    ! dBZ
    real, parameter    :: typical_rain_rms = 1.0   ! mm  
+   real, parameter    :: typical_div_rms = 0.001 
 
    ! The following typical mean squared values depend on control variable. They   
    ! are calculated in da_setup_background_errors and used in the VvToVp adjoint 
@@ -274,7 +276,7 @@ module da_control
    ! Do not use get_unit/free_unit because tracing is too low level
    integer, parameter :: trace_csv_unit = 8
 
-   integer :: y_unit, yp_unit, cost_unit, grad_unit, stats_unit, jo_unit
+   integer :: y_unit, yp_unit, cost_unit, grad_unit, stats_unit, jo_unit, stats_unit2
    integer :: check_max_iv_unit, check_buddy_unit, rand_unit, omb_unit, &
               filtered_obs_unit
    integer :: biasprep_unit, qcstat_conv_unit
@@ -465,6 +467,15 @@ module da_control
                                            ! data calibration
       Other_check             =  88        ! passed other quality check
 
+   ! QC flags for gpsref
+   integer, parameter :: qcflag_pcnt_below  = -31
+   integer, parameter :: qcflag_pcnt_middle = -32
+   integer, parameter :: qcflag_pcnt_above  = -33
+   integer, parameter :: qcflag_dndz        = -34
+   integer, parameter :: qcflag_dndz2       = -35
+   integer, parameter :: qcflag_cutoff      = -36
+   integer, parameter :: qcflag_height      = -77
+
    ! Observations:
 
    integer                :: num_procs            ! Number of total processors.
@@ -477,7 +488,7 @@ module da_control
 
    ! rtm_init setup parameter
 
-   integer, parameter            :: maxsensor = 30
+   integer, parameter            :: maxsensor = 31
 
    integer, parameter :: npres_print = 12
 
@@ -515,6 +526,10 @@ module da_control
    integer, parameter :: tamdar_sfc = 27
    integer, parameter :: rain      = 28
    integer, parameter :: gpseph    = 29
+   integer, parameter :: lightning = 30
+#if (WRF_CHEM == 1)
+   integer, parameter :: chemic_surf = 31
+#endif
 
    character(len=14), parameter :: obs_names(num_ob_indexes) = (/ &
       "sound         ", &
@@ -545,7 +560,11 @@ module da_control
       "tamdar        ", &
       "tamdar_sfc    ", &
       "rain          ", &
-      "gpseph        "  &
+      "gpseph        ", &
+      "lightning     "  & 
+#if (WRF_CHEM == 1)
+     ,"chemic_surf   " &
+#endif
    /)
 
    logical :: pseudo_tpw
@@ -673,5 +692,13 @@ module da_control
    logical :: global
 
    logical, allocatable :: fgat_rain_flags(:)
+
+   integer, parameter :: no_thin           = 0  ! no thinning
+   integer, parameter :: thin_single       = 1  ! keep one ob within a thinning box
+   integer, parameter :: thin_multi        = 2  ! keep multiple obs within a thinning box
+   integer, parameter :: thin_superob      = 3  ! superob in 2-D thinning boxes
+   integer, parameter :: thin_superob_hv   = 4  ! superob in horizontal and vertical
+
+   integer, parameter :: error_opt_nml     = 1  ! ob error specified in namelist
 
 end module da_control
