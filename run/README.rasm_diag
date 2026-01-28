@@ -3,7 +3,7 @@ meteorology (PSFC, TSK, PMSL, T2, TH2, Q2, U10, V10), fluxes at the surface
 (HFX, LH, SWDNB, GLW, LWUPB, SWUPB), and fluxes at the TOA (SWUPT, SWDNT, LWUPT, 
 LWDNT). The averaging can be set by the user with some interval of seconds, 
 minutes, hours, days, or month. The average output file is set to use auxhist5. 
-
+ 
 Additionally, diurnal averaging is provided which creates monthly averages for 
 three hour periods of time during the day (00-03, 03-06, etc.). The diurnal 
 average output is set to use auxhist6. This diurnal averaging output is only 

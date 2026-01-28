@@ -498,4 +498,3 @@ What is in WRF V4?
     time steps (no drift).
   * ESMF integration - WRF can be run as an ESMF component.
   * Improved documentation, both on-line (web based browsing tools) and in-line
-
